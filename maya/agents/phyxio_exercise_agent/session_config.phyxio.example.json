@@ -1,0 +1,27 @@
+{
+  "provider": "phyxio",
+  "first_page": 0,
+  "accepted_statuses": ["completed", "interrupted", "executed", "skipped", "not-executed"],
+  "phyxio": {
+    "max_pages": 10,
+    "timeout_ms": 5000,
+    "end_of_history_error": "The requested page index is out of bounds.",
+    "metric_statuses": ["completed", "interrupted", "executed"],
+    "metrics": {
+      "done_iter": {
+        "label": "Repetitions",
+        "unit": "repetitions",
+        "target_field": "goal_iter",
+        "target_kind": "goal",
+        "unset_target_values": [0]
+      },
+      "elapsed_time": {
+        "label": "Elapsed time",
+        "unit": "seconds",
+        "target_field": "limit_time",
+        "target_kind": "maximum",
+        "unset_target_values": [0]
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "model_id": "person_role",
+  "title": "Person & Role",
+  "version": "0.1.0-draft",
+  "status": "draft_screenshot_translation",
+  "source": {
+    "type": "screenshot",
+    "path": "maya/models_screenshots/person_role.png",
+    "extracted_at": "2026-07-08"
+  },
+  "model_kinds": ["data_schema", "guidance_policy"],
+  "nodes": [
+    {"id": "person", "label": "Person", "kind": "entity"},
+    {"id": "person_attribute", "label": "PersonAttribute", "kind": "entity"},
+    {"id": "person_preference", "label": "PersonPreference", "kind": "entity"},
+    {"id": "language_preference", "label": "LanguagePreference", "kind": "entity"},
+    {"id": "communication_preference", "label": "CommunicationPreference", "kind": "entity"},
+    {"id": "person_role", "label": "PersonRole", "kind": "entity"},
+    {"id": "cancer_survivor_role", "label": "CancerSurvivorRole", "kind": "entity"},
+    {"id": "aya_cancer_survivor_role", "label": "AYACancerSurvivorRole", "kind": "entity"},
+    {"id": "clinician_role", "label": "ClinicianRole", "kind": "entity"},
+    {"id": "caregiver_role", "label": "CaregiverRole", "kind": "entity"},
+    {"id": "family_member_role", "label": "FamilyMemberRole", "kind": "entity"}
+  ],
+  "relations": [
+    {"id": "person_has_preference", "label": "hasPreference", "from": "person", "to": "person_preference", "kind": "object_property", "confidence": "high"},
+    {"id": "person_has_attribute", "label": "hasAttribute", "from": "person", "to": "person_attribute", "kind": "object_property", "confidence": "high"},
+    {"id": "person_has_role", "label": "hasRole", "from": "person", "to": "person_role", "kind": "object_property", "confidence": "high"}
+  ],
+  "taxonomy_groups": [
+    {"id": "person_preference_subclasses", "parent": "person_preference", "members": ["language_preference", "communication_preference"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "person_role_subclasses", "parent": "person_role", "members": ["cancer_survivor_role", "clinician_role", "caregiver_role", "family_member_role"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "cancer_survivor_role_subclasses", "parent": "cancer_survivor_role", "members": ["aya_cancer_survivor_role"], "interpretation": "subclass", "confidence": "high"}
+  ],
+  "agent_contracts": {
+    "supervisor": {"usage": "routing_and_personalization_summary", "inject": "when routing, answering identity/memory questions, or resolving user role"},
+    "health_rag": {"usage": "role_and_preference_context", "inject": "when health answer should be personalized by role or communication preference"},
+    "phyxio_exercise_agent": {"usage": "role_and_communication_context", "inject": "when exercise instructions should adapt to role/preferences"}
+  },
+  "procedure_contracts": [],
+  "memory_bindings": [
+    {"path": "person.roles", "node": "person_role", "cardinality": "many", "temporal": false, "provenance_required": true, "status": "draft"},
+    {"path": "person.attributes", "node": "person_attribute", "cardinality": "many", "temporal": false, "provenance_required": true, "status": "draft"},
+    {"path": "person.preferences", "node": "person_preference", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"}
+  ],
+  "aliases": [],
+  "review_notes": [
+    "Preference subclasses are visually shown as inheritance into PersonPreference.",
+    "No datatype fields are visible in the screenshot; memory field design is deferred."
+  ]
+}

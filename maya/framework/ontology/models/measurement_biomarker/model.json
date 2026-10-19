@@ -1,0 +1,105 @@
+{
+  "model_id": "measurement_biomarker",
+  "title": "Measurement & Biomarker",
+  "version": "0.1.0-draft",
+  "status": "draft_screenshot_translation",
+  "source": {
+    "type": "screenshot",
+    "path": "maya/models_screenshots/measurement_biomarker.png",
+    "extracted_at": "2026-07-08"
+  },
+  "model_kinds": ["data_schema", "procedure_candidate"],
+  "nodes": [
+    {"id": "person", "label": "Person", "kind": "entity"},
+    {"id": "measurement_event", "label": "MeasurementEvent", "kind": "entity"},
+    {"id": "measurable_parameter", "label": "MeasurableParameter", "kind": "entity"},
+    {"id": "biomarker", "label": "Biomarker", "kind": "entity"},
+    {"id": "vital_sign", "label": "VitalSign", "kind": "entity"},
+    {"id": "physiological_parameter", "label": "PhysiologicalParameter", "kind": "entity"},
+    {"id": "behavioural_parameter", "label": "BehaviouralParameter", "kind": "entity"},
+    {"id": "psychological_parameter", "label": "PsychologicalParameter", "kind": "entity"},
+    {"id": "physical_performance_parameter", "label": "PhysicalPerformanceParameter", "kind": "entity"},
+    {"id": "engagement_parameter", "label": "EngagementParameter", "kind": "entity"},
+    {"id": "patient_reported_outcome", "label": "PatientReportedOutcome", "kind": "entity"},
+    {"id": "measurement_instrument", "label": "MeasurementInstrument", "kind": "entity"},
+    {"id": "measurement_device", "label": "MeasurementDevice", "kind": "entity"},
+    {"id": "questionnaire", "label": "Questionnaire", "kind": "entity"},
+    {"id": "measurement_protocol", "label": "MeasurementProtocol", "kind": "entity"},
+    {"id": "blood_pressure_measurement_protocol", "label": "BloodPressureMeasurementProtocol", "kind": "entity"},
+    {"id": "ecg_monitoring_protocol", "label": "ECGMonitoringProtocol", "kind": "entity"},
+    {"id": "laboratory_protocol", "label": "LaboratoryProtocol", "kind": "entity"},
+    {"id": "body_composition_protocol", "label": "BodyCompositionProtocol", "kind": "entity"},
+    {"id": "physical_performance_protocol", "label": "PhysicalPerformanceProtocol", "kind": "entity"},
+    {"id": "questionnaire_protocol", "label": "QuestionnaireProtocol", "kind": "entity"},
+    {"id": "measurement_instruction", "label": "MeasurementInstruction", "kind": "entity"},
+    {"id": "schedule", "label": "Schedule", "kind": "entity"},
+    {"id": "measurement_context", "label": "MeasurementContext", "kind": "entity"},
+    {"id": "home_monitoring_context", "label": "HomeMonitoringContext", "kind": "entity"},
+    {"id": "clinical_visit_context", "label": "ClinicalVisitContext", "kind": "entity"},
+    {"id": "symptom_triggered_context", "label": "SymptomTriggeredContext", "kind": "entity"},
+    {"id": "data_source", "label": "DataSource", "kind": "entity"},
+    {"id": "device_data_source", "label": "DeviceDataSource", "kind": "entity"},
+    {"id": "clinical_record_data_source", "label": "ClinicalRecordDataSource", "kind": "entity"},
+    {"id": "self_reported_data_source", "label": "SelfReportedDataSource", "kind": "entity"},
+    {"id": "questionnaire_data_source", "label": "QuestionnaireDataSource", "kind": "entity"},
+    {"id": "fhir_service_data_source", "label": "FHIRServiceDataSource", "kind": "entity"},
+    {"id": "timepoint", "label": "Timepoint", "kind": "entity"},
+    {"id": "observation_result", "label": "ObservationResult", "kind": "entity"},
+    {"id": "quantity_value", "label": "QuantityValue", "kind": "entity"},
+    {"id": "alert_threshold", "label": "AlertThreshold", "kind": "entity"},
+    {"id": "score_value", "label": "ScoreValue", "kind": "entity"},
+    {"id": "unit", "label": "Unit", "kind": "entity"}
+  ],
+  "relations": [
+    {"id": "person_participates_in_measurement_event", "label": "participatesIn", "from": "person", "to": "measurement_event", "kind": "object_property", "confidence": "high"},
+    {"id": "measurement_event_measures_parameter", "label": "measures", "from": "measurement_event", "to": "measurable_parameter", "kind": "object_property", "confidence": "high"},
+    {"id": "measurement_event_uses_instrument", "label": "usesInstrument", "from": "measurement_event", "to": "measurement_instrument", "kind": "object_property", "confidence": "high"},
+    {"id": "measurement_event_follows_protocol", "label": "followsProtocol", "from": "measurement_event", "to": "measurement_protocol", "kind": "object_property", "confidence": "high"},
+    {"id": "measurement_event_has_context", "label": "hasContext", "from": "measurement_event", "to": "measurement_context", "kind": "object_property", "confidence": "high"},
+    {"id": "measurement_event_has_source", "label": "hasSource", "from": "measurement_event", "to": "data_source", "kind": "object_property", "confidence": "high"},
+    {"id": "measurement_event_occurs_at", "label": "occursAt", "from": "measurement_event", "to": "timepoint", "kind": "object_property", "confidence": "high"},
+    {"id": "measurement_event_has_output", "label": "hasOutput", "from": "measurement_event", "to": "observation_result", "kind": "object_property", "confidence": "high"},
+    {"id": "measurement_protocol_has_instruction", "label": "hasInstruction", "from": "measurement_protocol", "to": "measurement_instruction", "kind": "object_property", "confidence": "high"},
+    {"id": "measurement_protocol_has_schedule", "label": "hasSchedule", "from": "measurement_protocol", "to": "schedule", "kind": "object_property", "confidence": "high"},
+    {"id": "observation_result_compared_against_threshold", "label": "comparedAgainst", "from": "observation_result", "to": "alert_threshold", "kind": "object_property", "confidence": "high"},
+    {"id": "observation_result_has_score_value", "label": "hasScoreValue", "from": "observation_result", "to": "score_value", "kind": "object_property", "confidence": "high"},
+    {"id": "observation_result_has_quantity_value", "label": "hasQuantityValue", "from": "observation_result", "to": "quantity_value", "kind": "object_property", "confidence": "high"},
+    {"id": "observation_result_has_unit", "label": "hasUnit", "from": "observation_result", "to": "unit", "kind": "object_property", "confidence": "high"}
+  ],
+  "taxonomy_groups": [
+    {"id": "measurable_parameter_subclasses", "parent": "measurable_parameter", "members": ["biomarker", "vital_sign", "physiological_parameter", "behavioural_parameter", "psychological_parameter", "physical_performance_parameter", "engagement_parameter", "patient_reported_outcome"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "measurement_instrument_subclasses", "parent": "measurement_instrument", "members": ["measurement_device", "questionnaire"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "measurement_protocol_subclasses", "parent": "measurement_protocol", "members": ["blood_pressure_measurement_protocol", "ecg_monitoring_protocol", "laboratory_protocol", "body_composition_protocol", "physical_performance_protocol", "questionnaire_protocol"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "measurement_context_subclasses_or_instances", "parent": "measurement_context", "members": ["home_monitoring_context", "clinical_visit_context", "symptom_triggered_context"], "interpretation": "subclass_or_instance", "confidence": "high"},
+    {"id": "data_source_subclasses_or_instances", "parent": "data_source", "members": ["device_data_source", "clinical_record_data_source", "self_reported_data_source", "questionnaire_data_source", "fhir_service_data_source"], "interpretation": "subclass_or_instance", "confidence": "high"}
+  ],
+  "agent_contracts": {
+    "supervisor": {"usage": "route biomarker, scan, measurement, and result interpretation questions", "inject": "summary when route decision depends on measurement context"},
+    "health_rag": {"usage": "interpret measurement context and observation results safely", "inject": "measurement event, source, context, units, thresholds, and protocol when relevant"},
+    "phyxio_exercise_agent": {"usage": "exercise measurement and monitoring context", "inject": "performed exercise session measurements and device source when relevant"}
+  },
+  "procedure_contracts": [
+    {
+      "id": "measurement_result_interpretation_requires_context",
+      "strictness": "candidate_strict",
+      "applies_when": ["user asks to interpret a measurement, biomarker, vital sign, score, or scan result"],
+      "required_steps": [
+        "identify measurable parameter",
+        "load observation result value and unit",
+        "load timepoint, data source, and measurement context",
+        "check whether an alert threshold exists before saying normal, high, or low",
+        "ask for missing unit or parameter if absent"
+      ]
+    }
+  ],
+  "memory_bindings": [
+    {"path": "measurements.events", "node": "measurement_event", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "measurements.observation_results", "node": "observation_result", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "measurements.protocols", "node": "measurement_protocol", "cardinality": "many", "temporal": false, "provenance_required": true, "status": "draft"}
+  ],
+  "aliases": [],
+  "review_notes": [
+    "The grouped boxes explicitly say subclasses or instances for MeasurementContext and DataSource; keep interpretation flexible.",
+    "The screenshot does not show datatype fields for numeric value, unit symbol, reference range, or threshold comparator."
+  ]
+}

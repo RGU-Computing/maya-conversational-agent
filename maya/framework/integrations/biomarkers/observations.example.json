@@ -1,0 +1,64 @@
+[
+  {
+    "id": "bp-old",
+    "patient_id": "synthetic-patient",
+    "measurement_id": "blood_pressure",
+    "measured_at": "2026-09-01T09:00:00Z",
+    "status": "final",
+    "source": "Synthetic demonstration fixture",
+    "result": {
+      "label": "Blood pressure",
+      "context": "Seated home measurement",
+      "components": [
+        {
+          "label": "Systolic",
+          "value": 120,
+          "unit": "mmHg"
+        },
+        {
+          "label": "Diastolic",
+          "value": 78,
+          "unit": "mmHg"
+        }
+      ]
+    }
+  },
+  {
+    "id": "bp-latest",
+    "patient_id": "synthetic-patient",
+    "measurement_id": "blood_pressure",
+    "measured_at": "2026-10-10T09:00:00Z",
+    "status": "final",
+    "source": "Synthetic demonstration fixture",
+    "result": {
+      "label": "Blood pressure",
+      "context": "Seated home measurement",
+      "components": [
+        {
+          "label": "Systolic",
+          "value": 134,
+          "unit": "mmHg"
+        },
+        {
+          "label": "Diastolic",
+          "value": 86,
+          "unit": "mmHg"
+        }
+      ]
+    }
+  },
+  {
+    "id": "glucose-latest",
+    "patient_id": "synthetic-patient",
+    "measurement_id": "blood_glucose",
+    "measured_at": "2026-10-09T08:00:00Z",
+    "status": "final",
+    "source": "Synthetic demonstration fixture",
+    "result": {
+      "label": "Blood glucose",
+      "value": 5.4,
+      "unit": "mmol/L",
+      "context": "Fasting laboratory sample"
+    }
+  }
+]

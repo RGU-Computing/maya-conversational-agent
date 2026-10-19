@@ -1,0 +1,8 @@
+{
+  "provider": "disabled",
+  "first_page": 0,
+  "comparison_limit": 5,
+  "accepted_statuses": ["completed", "interrupted"],
+  "fallback_text": "I couldn’t prepare your session feedback just now. Please try again shortly.",
+  "subject_clarification": "Are you asking about your own latest exercise session? I can only access the current participant’s sessions."
+}

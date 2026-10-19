@@ -1,0 +1,630 @@
+# MAYA
+
+See [the codebase structure guide](docs/ARCHITECTURE.md) for module ownership,
+configuration locations and maintenance commands.
+The [ontology guide](docs/ONTOLOGY.md) distinguishes the main partner ontology
+from MAYA's auxiliary disambiguation policy and documents their delivery locations.
+
+## Setup and mirror handover
+
+For the complete identity/provider setup, live checks and troubleshooting commands,
+follow [the mirror handover guide](docs/MIRROR_HANDOVER.md). Run
+`python -m maya.cli.check_tools --help` for the model-free deployment diagnostic.
+
+The supported application entry point is `maya.framework.supervisor.run_with_vad`.
+The old Flask service, HTTP clients and alternate voice runners have been retired.
+
+From the repository root, install the locked Python 3.13 environment:
+
+```bash
+uv sync --locked --inexact --python 3.13
+```
+
+`--inexact` preserves separately installed mirror packages such as ICE and Phyxio.
+On the Linux mirror, UCLM's `libphyxio-connect` Debian package and its ICE/system
+dependencies must be installed first. Its supplied Python wheel is made available
+to the virtual environment through the existing mirror requirements:
+
+```bash
+uv pip install --python .venv/bin/python -r requirements.txt
+```
+
+Keep the deployment's existing `.env`; for a new installation, use `.env.example`
+as the template and supply the actual service credentials. Supply a participant
+configuration following `maya/session.example.json`, with the real participant ID.
+Local `.env` and `maya/session.json` files are excluded from Git.
+
+```bash
+.venv/bin/python -m unittest discover -s maya/tests -p 'test_*.py' -q
+.venv/bin/python -m maya.framework.supervisor.run_with_vad --session-config /absolute/path/to/session.json
+```
+
+HealthRAG needs its configured PostgreSQL/pgvector literature collection. The
+checked-in corpus and chunk snapshot contain 117 readable sources and 11,169 chunks
+after removing three byte-identical PDF copies. For a new database, or a mirror
+still using the earlier collection, stop MAYA and rebuild that literature collection:
+
+```bash
+.venv/bin/python -m maya.cli.build_index
+```
+
+This command replaces the configured literature collection; participant memory and
+conversation checkpoints are separate. The empty `pgvector/` Git submodule entry
+was removed; PostgreSQL still requires the pgvector extension installed on its server.
+
+The biomarker and exercise-feedback providers remain disabled by default. Their
+dummy examples explicitly enable synthetic fixtures; separate `fhir` and `phyxio`
+examples select the implemented real adapters. Live deployment still requires
+the confirmed FHIR patient mapping, Phyxio connection and UCLM login/logout handoff.
+The Phyxio session-history wrapper uses the positional page argument required by
+`libphyxio-connect` 26.5.29. Actual ICE, microphone and speaker checks must run on
+the mirror. Partner ontology files are retained unchanged.
+
+The connector subclass only forwards Phyxio's documented callbacks; MAYA's speech
+logic lives in `PhyxioService`, so it cannot override the library's internal state
+methods. A cancelled recording must finish cleanup before a new one starts. Audio
+queue waits check cancellation every `MAYA_VOICE_POLL_SECONDS` (default 0.1 seconds),
+and `MAYA_VOICE_SECONDS` bounds capture even when no frames arrive. On failure the
+interaction is closed so the user can retry; `MAYA_VOICE_ERROR_TEXT` controls the
+message. Select the mirror microphone with `MAYA_MIC_DEVICE` when its default input
+is unsuitable. Linux device access still needs checking under the deployed service
+account; this recovery does not make an unavailable device usable.
+
+Voice-bridge validation on 19 October 2026: 246 offline tests passed, including
+12 callback/recovery tests. A separate check loaded UCLM's actual 26.5.29 connector
+source and exercised a microphone failure, retry, `run_with_vad`, supervisor routing,
+session retrieval and speech delivery. Models were real; native clients, audio and
+ASR/TTS were simulated. No real ICE connection or Linux audio device was exercised.
+
+Generated outputs belong under ignored `output/`; they are not deployment inputs.
+The regression tests, live scenario scripts, memory inspector, index builder and
+latency diagnostic remain available for development and deployment checks.
+
+Cleanup validation on 16 October 2026: 209 offline tests passed in a fresh locked
+environment, plus five live HealthRAG scenario groups, five live exercise scenario
+groups and a typed-input main-runner check. Live checks used real models and the
+literature index, isolated participant memory and synthetic tool records; speech
+playback and ICE were excluded. All 23 ontology source/configuration files matched
+their pre-cleanup hashes. The snapshot and local database were checked against each
+other for all 11,169 retained literature chunks.
+
+## Latest exercise-session feedback
+
+The exercise agent's read-only `get_latest_exercise_session` tool retrieves the
+current participant's latest recorded session and compares it with up to
+`comparison_limit` earlier sessions (configured as five). The supervisor and
+exercise decision stage receive recent dialogue so a follow-up can refer to an
+exercise without repeating its name. They must clarify when the activity or
+subject is unclear; a request to start does not establish that a session finished.
+
+The default provider is disabled. To use the synthetic fixtures:
+
+```bash
+MAYA_EXERCISE_SESSION_CONFIG="$PWD/maya/agents/phyxio_exercise_agent/session_config.example.json" \
+  .venv/bin/python -m maya.framework.supervisor.run_with_vad --session-config maya/session.json
+```
+
+The example records belong to `participant-001`. For another test participant,
+provide records with that `user_id` in the configured fixture file. No automatic
+fallback to another participant exists. Session identities, dates, routine names,
+targets and values are fixture data in `sessions.example.json`. Defaults and
+comparison limits live in `session_config.json`; feedback instructions live in
+the exercise entry of `maya/agents/config.jsonl`. `MAYA_CONVERSATION_CONFIG` may
+override `maya/framework/conversation/conversation.json` to change the dialogue message limit.
+
+Comparison selection and arithmetic run in Python: same routine and provider
+`comparison_key`, then matching metric ID, units, target and target kind. Results include
+per-metric counts, means and differences; missing values are not zero-filled.
+Unfinished/future records are excluded, and ambiguous latest records are reported.
+An interrupted session can be reviewed without presenting it as completed.
+The response should identify the record's date, acknowledge effort and describe
+changes without assuming that more repetitions or longer duration is healthier.
+
+The tool accepts no model-supplied identity. It uses the session's `user_id`, checks
+record ownership where supplied (see the native provider's binding limitation below), and exposes results in
+`AIMessage.additional_kwargs["exercise_session"]` with `executed_tool` and the
+synthetic flag. It neither starts an exercise nor writes synthetic results into
+ontology memory.
+
+### Phyxio session-history provider
+
+The real adapter is `maya/agents/phyxio_exercise_agent/phyxio_sessions.py`. It reuses
+the existing mirror connection and `getSessionList(page)` interface behind
+`routine.get_sessions()`. Copy `session_config.phyxio.example.json` outside the
+repository and select it with `MAYA_EXERCISE_SESSION_CONFIG`. Settings include:
+
+- `first_page`: shared by history listing and session review (top-level setting,
+  formerly inside `phyxio`). The example starts at page 0, as verified against the
+  mirror response. `phyxio.max_pages` and `phyxio.end_of_history_error` bound traversal;
+  a first-page error is not treated as empty history.
+- `accepted_statuses`: eligible recorded exercise statuses, including partially
+  performed routines with `executed`, `skipped` and `not-executed` results.
+- `metric_statuses`: statuses whose measurements can contribute to performance
+  statistics. Skipped and unperformed results remain in the source records, but
+  their placeholder zeros are excluded from metrics and comparisons.
+- `timeout_ms`: per-call timeout on a separate ICE proxy, without changing the
+  original connection. Exactly one connected UI is required for this read path.
+- `metrics`: documented result fields, labels, units, target fields and target kinds.
+  Repetition goals and maximum time limits remain distinct. `unset_target_values`
+  excludes configured placeholder targets (0 in the supplied Phyxio data), while
+  preserving actual zero measurements and the original source fields.
+
+The adapter scans bounded history pages until an empty page or the configured end
+error, then sorts by recorded date. It does not assume newest-first pagination.
+An unexpected error, repeated record or exceeded page limit returns unavailable
+rather than feedback based on incomplete history. Increase `max_pages` for longer
+histories after confirming the partner's pagination behaviour.
+
+Native `date` becomes `recorded_at`; it is not labelled as an exact finish time.
+Legacy synthetic fixtures using `ended_at` still load, but tool output now uses
+`recorded_at`. No session ID or session-wide completion status is invented when
+absent upstream. Individual exercise results and reports are preserved, including
+their statuses. Only configured statuses are eligible; this does not establish
+whole-routine completion. A latest skipped-only record is reported without
+performance metrics rather than silently replaced by an older session.
+Current routine names are optional, and current routine targets are never substituted
+for historical targets. Comparable groups use recorded exercise IDs, repetition
+goals and time limits; this does not prove the same prescription version or equipment.
+
+Both history tools use the participant ID from the runner's `SessionConfig`.
+The exercise-provider configuration contains no participant ID. The connection
+receives the same session object as the runner, and rejects history requests for
+a different participant before calling Phyxio. The model cannot supply an ID.
+
+**Deployment boundary:** libphyxio-connect 26.5.29 supplies no participant identity
+in its history response or login/logout event in the supplied ICE interface.
+UCLM must supply the authenticated participant's startup payload and keep the
+connected Phyxio UI logged into that participant. Stop MAYA on logout and launch
+it with the next participant's payload on login. MAYA validates its internal
+session identity; it cannot independently verify the browser's login from this API.
+
+`python -m maya.tests.live_phyxio_session_scenarios` exercises supervisor routing,
+the native adapter, pagination and feedback with simulated Phyxio responses and
+real models. It does not prove live ICE connectivity or participant ownership.
+The mirror must have UCLM's connector/ICE installed in the runner environment.
+
+Validation on 19 October 2026 includes a replay of a supplied mirror response,
+262 offline tests, and 14 native-provider supervisor scenarios. The supervisor
+checks cover two onboarding identities, identity mismatches for both history tools,
+partial routines, skipped-only records and history listing. A
+`run_with_vad.main()` check exercises the supplied connector source, configuration,
+history translation, routing, displayed feedback and the speech-output call.
+Supervisor and runner checks use real models, synthetic Phyxio responses and
+isolated RAM memory; live ICE and audio playback remain mirror-side checks.
+UCLM's participant identity lifecycle also remains outstanding.
+
+Offline tests: `python -m unittest discover -s maya/tests -p 'test_*.py' -q`.
+Live supervisor-level scenarios:
+`python -m maya.tests.live_exercise_session_scenarios`.
+The live harness uses actual routing and exercise models, private RAM memory,
+synthetic records and simulated mirror transport; it does not test ICE or audio.
+
+## Biomarker tool
+
+The shared observation tool is available to supervisor routing and HealthRAG's
+ontology assessment. It is disabled by default. To run the dummy provider from
+the repository root:
+
+```bash
+MAYA_BIOMARKER_CONFIG="$PWD/maya/framework/integrations/biomarkers/config.example.json" \
+  .venv/bin/python -m maya.framework.supervisor.run_with_vad \
+  --session-config maya/session.json
+```
+
+Try “Show my latest blood pressure and blood glucose measurements” for a direct
+readout, or “What does my latest blood pressure measurement mean?” for HealthRAG.
+The configured demo participant is the only participant mapped to these fixtures.
+The example suppresses the displayed/spoken prefix with `synthetic_notice: ""`;
+tool results retain `synthetic: true`. Set a non-empty notice to show and speak it.
+Synthetic results are never
+stored as reusable health-answer summaries or extracted as participant facts.
+
+Configuration overrides live in `MAYA_BIOMARKER_CONFIG`; omitted fields come from
+`maya/framework/integrations/biomarkers/config.json`. The example defines measurement catalog
+IDs/descriptions, participant-to-patient mapping and a fixture path (relative to
+the configuration file). Values, units, dates and grouped components are fixture
+data in `observations.example.json`, not clinical rules embedded in Python.
+Accepted statuses and tool instructions are configurable. There are no built-in
+clinical thresholds or automatic unit conversions.
+
+The existing routing/assessment model selects relevant catalog IDs using the
+ontology and current context. A readout uses the supervisor; interpretation uses
+HealthRAG. HealthRAG can also request observations itself, then reassess once
+before asking the user for missing information. Lookups and the resulting
+assessment are checkpointed across clarification resume. Only unattempted IDs
+can be fetched again within that turn; new turns start with a fresh lookup.
+Clinical relevance and subject identification remain model judgements; identity
+binding, catalog validation, duplicate suppression and cache bypass are code.
+
+Observation context reaches both query rewriting (including the first turn) and
+answer generation. Turns with lookup results, including failures, bypass both
+health-answer caches. Results retain their original timestamps and provenance;
+“latest available” does not imply recent or suitable for every question. Empty,
+unavailable, unsupported and unmapped outcomes remain distinguishable. UI clients
+can inspect `AIMessage.additional_kwargs["biomarker_results"]`.
+
+Tool results are retained in the graph's existing checkpointer; durable clinical
+memory ingestion is not part of this integration.
+
+### UCLM FHIR provider
+
+The same tool supports `provider: "fhir"` through
+`maya/framework/integrations/biomarkers/fhir.py`. Install UCLM's supplied wheel in the runner's
+environment (the mirror may already provide the library):
+
+```bash
+uv pip install --python .venv/bin/python /path/to/libfhir-26.10.16-py3-none-any.whl
+```
+
+This partner package is installed separately, not fetched from a similarly named
+public package. Use `uv sync --locked --inexact` to preserve it during updates.
+
+Decrypt Oscar's configuration locally into a private directory outside the
+repository, with directory permissions `700` and file permissions `600`. The
+runtime reads the decrypted JSON (`url`, `token`, `is_secure`); it does not need
+GPG or the private key. Copy `config.fhir.example.json` into that directory and
+set:
+
+- `fhir.client_config_path`: path to the credential JSON, relative to this
+  configuration file or absolute.
+- `patient_map`: confirmed MAYA user IDs mapped to FHIR Patient IDs. There is no
+  fallback or assumption that the two IDs match.
+- `catalog` and `fhir.resource_types`: the measurement descriptions exposed to
+  agents and their corresponding names from `libfhir.ResourceCreator.supported_observations`.
+  Add or remove measurements in configuration, not Python. Unsupported names
+  fail at startup; glucose is not in the supplied library's current catalogue.
+- `fhir.timeout_seconds`: HTTP connection/read timeout per requested measurement.
+
+Select this configuration using `MAYA_BIOMARKER_CONFIG` and run the usual
+`python -m maya.framework.supervisor.run_with_vad` command. The repository default
+remains disabled; the FHIR example has an empty patient map until UCLM confirms
+the mapping. Never put credentials or participant mappings into tracked files.
+
+The adapter makes only scoped `/record/get` requests using libfhir's transport,
+with HTTPS verification, a timeout and no redirects. It reads raw FHIR JSON
+because libfhir 26.10.16's parsed objects lose scalar units and reject timestamp
+offsets/fractions. Source quantities, components, measurement context and reference
+ranges are preserved without inventing units. Patient references must match
+`Patient/<configured ID>` and measurement codes must match the library's catalogue.
+Missing/ambiguous timestamps or malformed responses produce `unavailable`, not
+an apparently empty medical history.
+
+For each measurement, the adapter selects the latest accepted records returned
+by the proxy, preserving ties. Period measurements use the period end (or start
+when open) and retain the original period. The supplied proxy interface exposes
+no pagination controls; completeness of returned history still needs validation
+with UCLM's real patient data. No patient records are created or changed.
+
+Adapter tests use synthetic HTTP responses. For real supervisor routing,
+clarification/resume and retrieval with the adapter and simulated HTTP, run
+`python -m maya.tests.live_fhir_scenarios`. A successful device-list request verifies
+connectivity only; real biomarker retrieval requires a confirmed test patient.
+
+Verified on 19 October 2026: 220 offline tests, seven live supervisor scenarios
+using simulated FHIR HTTP responses, and a typed-input `run_with_vad` check passed.
+The new adapter also completed a real read-only device request to UCLM. Participant
+data, microphone/speaker playback and mirror ICE were not exercised by these checks.
+
+Tests: `python -m unittest discover -s maya/tests -p 'test_*.py' -q`.
+Explicit live model/retrieval smoke test with synthetic fixtures and RAM-only
+participant memory: `python -m maya.tests.live_biomarker_scenarios`.
+For clarification, verified memory reuse across fresh graphs, failed-save
+recovery and user isolation, run
+`python -m maya.tests.live_memory_conversation_scenarios`. This uses real models
+and retrieval with an isolated RAM store; it does not test PostgreSQL or audio.
+
+To change the demo participant, change `user_id` in the selected session JSON
+and add the same ID to `patient_map` in the selected biomarker configuration,
+mapped to `synthetic-patient`. Restart the runner. A new ID gets separate memory;
+using the previous ID restores access to its saved facts. Changing
+`MAYA_RUN_USER_ID` has no effect while a session JSON is selected. The synthetic
+patient mapping is only for demonstrations; UCLM must supply real patient mapping.
+
+## Onboarding configuration
+
+`run_with_vad.py` accepts one participant and their preferences at startup:
+
+```bash
+python -m maya.framework.supervisor.run_with_vad --session-config /absolute/path/to/session.json
+```
+
+The payload is illustrated in [maya/session.example.json](maya/session.example.json):
+
+```json
+{
+  "user_id": "pilot-participant-123",
+  "preferences": {
+    "personality_id": "supportive",
+    "tts_voice": "en-GB-LibbyNeural",
+    "asr_language": "auto"
+  }
+}
+```
+
+UCLM should resolve the card to a stable participant ID, persist the onboarding
+choices in Phyxio, and supply this payload when launching MAYA. A JSON file must
+contain a non-empty string `user_id`; an invalid file never falls back to another identity.
+Unknown fields and invalid setting values are rejected before the graph starts.
+This single ID feeds the supervisor, participant memory and exercise-history
+tools. No participant-specific exercise-provider configuration is needed.
+FHIR patient mapping remains a separate service requirement.
+
+| Preference | Default | Meaning |
+| --- | --- | --- |
+| `personality_id` | `supportive` | Warm, patient explanations that acknowledge expressed concerns; alternatives are `concise` and `default` (the original style). |
+| `tts_voice` | `en-GB-RyanNeural` | Azure Speech voice name. Both local and mirror audio use it. |
+| `asr_language` | `auto` | Whisper automatic detection, or a supported two-letter language code such as `en` or `es`. |
+
+Voice names and recognition languages must be supported by the deployed provider.
+The local validator checks their format, not remote availability. Recognition
+language is separate from the voice used to speak replies; this version does not
+add a response-language/translation setting. The two voice examples already used
+in MAYA are Ryan and Libby; the shared fallback is now Ryan. Set Libby explicitly
+to retain the mirror's previous fallback voice.
+
+The contract, defaults and personality descriptions live in
+[personalization.py](maya/framework/conversation/personalization.py). UCLM can obtain a
+JSON-serializable schema and option descriptions without importing ICE or starting
+MAYA:
+
+```python
+from maya.framework.conversation.personalization import SessionConfig, onboarding_options
+
+options = onboarding_options()  # Includes JSON Schema, defaults and personality descriptions.
+session = SessionConfig.model_validate(payload)
+
+# For a Python launcher, once per process:
+from maya.framework.supervisor.run_with_vad import main
+main(session)
+```
+
+For the CLI, an explicit `--session-config` path takes precedence over
+`MAYA_SESSION_CONFIG`. Fields in the file override environment defaults:
+`MAYA_PERSONALITY`, `AZURE_SPEECH_VOICE` and `MAYA_ASR_LANGUAGE`. A directly
+constructed `SessionConfig` uses its declared defaults, independent of these
+environment settings. Speech credentials and recording/device settings remain
+deployment environment variables; they are not onboarding fields.
+
+Without a JSON file, the runner requires `MAYA_RUN_USER_ID`; there is no default
+participant identity. Missing or blank IDs fail before the graph starts.
+Pilot launches should supply the participant payload resolved by Phyxio.
+Settings remain fixed for that process. UCLM must stop it on logout and start a
+new process with the next participant's payload; editing the file does not switch
+an active session. No HTTP endpoint or new preference database is introduced.
+
+Each launch creates a fresh conversation thread while retaining memory under
+`user_id`. The optional development override `MAYA_RUN_THREAD_ID` resumes a thread
+label scoped to that participant; checkpoint IDs now encode `[user_id, label]`,
+so old unscoped checkpoint IDs are not resumed. Existing long-term memory is
+unchanged.
+
+Personality instructions affect generated replies and clarification wording in
+the supervisor, health and exercise agents. They add no model calls and retain the
+existing evidence, safety and tool instructions. Fixed confirmations and error
+messages remain unchanged. Health answer cache entries carry a personality/version
+key; older entries are left in storage but are not reused. Changing only voice or
+recognition language does not invalidate the text cache. Personality instructions
+are included in the cache fingerprint; after editing `personalities.json`, restart
+MAYA so it uses the updated instructions and cache scope.
+
+Run the offline regression suite from the repository root:
+
+```bash
+python -m unittest discover -s maya/tests -p 'test_*.py' -q
+```
+
+It uses model, speech, database and transport doubles. It verifies configuration
+propagation and execution contracts, not live model quality, voice availability
+or the Linux mirror connection; those still require deployment smoke tests.
+
+## Health references, speech and notices
+
+Health clarification uses the rules in
+[disambiguation_ontology.json](maya/framework/conversation/disambiguation_ontology.json)
+alongside selected main ontology models and participant records. Relevant remembered
+treatments, including past cancer exposures, can resolve a question without
+asking again. Clarification is needed when the relevant treatment remains missing
+or ambiguous, such as a newly mentioned treatment absent from memory or a question
+about someone else. General educational questions can still be answered directly.
+Rendered rules include their identifiers and numbers for attribution.
+
+Completed HealthRAG messages include `additional_kwargs["clarification"]` with
+the assessment status, question type, missing fields, selected ontology models
+and rule checks. The runner prints a compact clarification trace separately from
+the retrieval trace; diagnostic fields are not spoken. Failed assessments,
+missing/unattributable rule checks, omitted clarification-policy nodes or rules,
+unsatisfied rules without a named missing requirement,
+or empty required clarification questions stop the answer before retrieval/cache
+lookup. An incomplete assessment gets one structural repair attempt; it must pass
+validation before continuing. Unmet ontology requirements take priority over
+generic PICOT gaps when choosing the clarification question, including requirements
+whose names match PICOT fields. The response text for that failure
+is configurable as `clarification_unavailable_text` in the response policy.
+These checks make the decision auditable; they do not certify model judgements
+or clinical correctness.
+
+Loading ontology context also starts background recovery of pending memory jobs.
+For relevant updates belonging to the same user, context loading waits up to
+`recovery_wait_seconds` (supplied value: 2 seconds). If verification is still
+pending or failed again, MAYA returns `recovery_unavailable_text` rather than
+asking for the same information or answering without checking it. The user can
+try the question again after background processing finishes. Unprocessed input
+is never injected as clinical context; the existing extractor, verifier and schema
+checks govern durable writes. Successful processing, including rejection, removes
+the pending job. These settings and `pending_job_limit` are configured in
+`maya/framework/ontology/models/manifest.json` under `runtime.memory_policy`. No model calls are added
+when there is no pending work, and unrelated users/models do not wait for it.
+
+The assessment is checkpointed as a LangGraph task. Resuming a clarification
+reuses that decision rather than running the assessment again; a new question
+gets a new assessment. Retrieval receives the original question, the clarification
+asked and the user's reply. The configurable `health_output_instruction` tells
+the answer model to acknowledge unavailable details and avoid conclusions that
+depend on them; this is generation guidance, not a second validation of the reply.
+
+Shared model requests require `MAYA_MODEL_TIMEOUT_SECONDS` and
+`MAYA_MODEL_MAX_RETRIES` in the environment (see `.env.example`; supplied values
+are 45 seconds and zero retries). These apply to individual requests, not the
+whole turn. A clarification assessment request failure returns
+`clarification_unavailable_text`. Restart MAYA after changing these settings.
+
+The main runner, `run_with_vad.py`, displays retrieved references after each
+completed HealthRAG answer and places the health disclaimer last. TTS receives
+the answer and disclaimer only. Clarification questions stay short. The runner
+waits for the user and does not display or speak an automatic introduction.
+
+When HealthRAG starts, before clarification assessment, the runner schedules
+`health_processing_status` after `health_processing_delay_seconds` (2 seconds in
+the supplied response policy). A response or error arriving sooner cancels it.
+Processing continues during speech; the answer or clarification question waits for
+local acknowledgement playback, or follows it in Phyxio's existing TTS queue.
+It is spoken at most once per user turn, including retries and clarification resumes.
+Ordinary conversation does not trigger it, and it is not stored in conversation or
+health memory. Custom policy files must include both fields; the status field was
+renamed from `health_retrieval_status`. UCLM can consume the same
+`{"event": "health_processing_started"}` custom stream event to drive its UI.
+
+Presentation wording, labels and the health output-format instruction live in
+[response_policy.json](maya/framework/conversation/response_policy.json). Supply a complete
+replacement with `MAYA_RESPONSE_POLICY=/absolute/path/to/policy.json`; it is
+validated and loaded once per process. Restart to apply changes. Reference and
+disclaimer formatting adds no model calls. The supplied English policy can be replaced for a
+deployment's language; ASR language selection does not translate it.
+
+### Editing HealthRAG without changing Python
+
+The `health_rag.config_path` entry in [agents/config.jsonl](maya/agents/config.jsonl)
+points to [health_rag/config.json](maya/agents/health_rag/config.json). Paths are
+relative to the agent registration file, including when replacing that file with
+`MAYA_AGENTS_CONFIG=/absolute/path/to/agents.json`. Use valid JSON or JSONL;
+comments and trailing commas are not supported. URLs and literal braces in prompt
+text are preserved. Restart MAYA after edits.
+
+| Setting | What partners can change |
+| --- | --- |
+| `prompts.assessment` | How the model applies the supplied ontology and fills the clarification assessment. |
+| `prompts.assessment_repair` | Instructions for correcting missing or invalid ontology rule checks. |
+| `prompts.clarification` | How to phrase the selected clarification question. |
+| `prompts.query_rewrite` | How conversation, records and observations become a retrieval query. |
+| `prompts.answer` | Health explanation style, grounding and handling of insufficient information. |
+| `prompts.urgent_answer` | Immediate safety wording when the assessment identifies urgency; bypasses retrieval and answer reuse. |
+| `retrieval` | Result count, citation count, excerpt size and PGVector similarity threshold. |
+| `cache` | Similarity and token-overlap thresholds for reusing prior answers. |
+| `messages` | Empty-result and cached-answer wording. |
+
+These are literal instructions, not templates: Python attaches the current
+question, ontology, memory, observations and evidence. Required fields are
+validated at startup; misspellings and empty prompts fail clearly. The old
+HealthRAG registration fields `prompt`, `tools` and `model` are rejected rather
+than ignored. Model deployment remains in the shared Azure environment settings.
+
+Clinical requirements remain in the partner ontology files. HealthRAG prompts
+apply those requirements; they do not redefine the ontology. Structured output
+schemas and consistency checks remain in Python. The supervisor's structured
+`question_subject` controls access to the signed-in user's clinical records and
+observations. Health questions about another person, general education or an
+unresolved subject receive ontology definitions without those personal records.
+Personality wording is shared
+through [personalities.json](maya/framework/conversation/personalities.json); onboarding still
+selects the existing personality IDs. The empty `default` instruction adds no
+style override; `supportive` remains the session default. Reference/disclaimer rendering remains in
+`response_policy.json`; its `health_output_instruction` covers presentation only.
+The previous `assessment_repair_instruction` field has moved to
+`prompts.assessment_repair`; remove it from custom response-policy files.
+
+Clarification replies and actual participant records loaded for the selected ontology
+models trigger query rewriting, independently of the model's PICOT source labels.
+Conversation context and observations also trigger rewriting. If rewriting fails
+or returns nothing, the search retains the supplied context and record provenance;
+ontology definitions alone do not trigger a rewrite. Empty retrieval results
+return `messages.no_evidence` directly, with no medical answer generation. Urgent
+safety responses take their own path and do not depend on retrieved documents.
+Background memory verification checks coverage for every proposed record and
+property. An incomplete result gets one retry for the omitted records using the
+same ontology policy; if it remains incomplete, the existing pending job is kept
+for recovery. A complete semantic rejection is not retried or treated as approval.
+
+Answer reuse includes a fingerprint of the HealthRAG configuration, disambiguation
+ontology, rendered ontology/profile context, record context supplied to retrieval,
+response style and output instruction.
+Changing those inputs prevents reuse of answers generated under the old settings.
+Reference headings and the disclaimer are rendered from the current policy on
+every delivery, including cached answers. This is not a corpus-update invalidation
+mechanism; corpus/index changes still require managing the answer cache separately.
+
+Run the offline regression suite with
+`.venv/bin/python -m unittest discover -s maya/tests -p 'test_*.py'`.
+For live supervisor scenarios, run
+`.venv/bin/python -m maya.tests.live_health_config_scenarios`.
+The live suite uses the configured models and literature, synthetic observations
+and isolated in-memory storage. It does not test microphone, TTS playback or ICE.
+Its answers, workflow checks and memory extraction/verification traces are saved
+under `output/health_config_live*.json`; inspect those alongside the pass/fail results.
+
+For UCLM's UI, each completed HealthRAG `AIMessage` exposes
+`additional_kwargs["presentation"]` with `answer_text`, `references`, `disclaimer`,
+`display_text` and `speech_text`. Render the structured fields or `display_text`;
+send only `speech_text` to TTS. `AIMessage.content` remains the answer alone for
+conversation context. Each reference contains `title`, `file_name` and `page`
+(1-based PDF page, or null if unavailable). These identify the actual excerpts
+supplied to the model, deduplicated per source/page; they are not a claim that
+every generated statement is supported. Titles currently come from corpus
+metadata, often filenames. No article titles, URLs or DOIs are guessed, and local
+directory paths are excluded from presentation. Fresh and cached answers use the
+same renderer; older caches that retained only two citations are bypassed.
+
+Onboarding can read the validated policy without starting models or ICE:
+
+```python
+from maya.framework.conversation.responses import load_response_policy, opening_response
+
+policy = load_response_policy().model_dump(mode="json")
+opening = opening_response()  # display_text and speech_text
+```
+
+`privacy_notice_url` is deliberately null until the partners supply the pilot's
+actual notice. If configured, `opening_response()` includes that link in its
+display text for onboarding. This helper does not display or speak anything;
+the runner does not call it. An external UI must present the AI disclosure and
+applicable privacy information before participant input, including after a new
+participant logs in; live RFID switching still awaits UCLM's lifecycle contract.
+
+Reviewed on 12 October 2026: the [MAYA website privacy policy](https://maya-horizon.eu/privacy-policy/)
+describes website visitors and cookies, and its [contact page](https://maya-horizon.eu/contact/)
+lists a general project email. Neither establishes the chatbot pilot's controller,
+DPO contact or health-data processing notice. Do not reuse it as the pilot notice
+without partner confirmation. The [European Commission's Article 50 guidance](https://digital-strategy.ec.europa.eu/en/faqs/transparency-obligations-under-article-50-ai-act)
+addresses clear AI disclosure at the first interaction; the [EDPB's transparency guidance](https://www.edpb.europa.eu/sme/be-compliant/respect-individuals-rights_en)
+separately requires accessible information about the actual personal-data
+processing. The health disclaimer is not a privacy notice or a claim of GDPR/AI
+Act compliance. Clinical grounding quality and the Linux ICE/display integration
+still need their own validation.
+
+## Inspecting Memory
+
+The memory inspector provides a read-only JSON view of the users, namespaces,
+stored values, and optional LangGraph thread checkpoints in the configured
+PostgreSQL database.
+
+```bash
+# Discover user IDs and their memory namespaces.
+python -m maya.cli.inspect_memory --list-users
+
+# Show all memory namespaces and values for one user.
+python -m maya.cli.inspect_memory --user-id test1
+
+# Focus a demonstration on one or more namespaces.
+python -m maya.cli.inspect_memory \
+  --user-id test1 \
+  --namespace profile \
+  --namespace ontology
+
+# Include the latest checkpoint for a LangGraph conversation thread.
+python -m maya.cli.inspect_memory \
+  --user-id test1 \
+  --thread-id YOUR_THREAD_ID
+```
+
+Long strings are shortened to 500 characters by default to keep demonstrations
+readable. Use `--full` to show complete content, or `--max-string-length 1000`
+to choose another display limit. The script does not write to memory.

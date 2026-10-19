@@ -1,0 +1,138 @@
+{
+  "model_id": "clinical_profile",
+  "title": "Clinical Profile",
+  "version": "0.1.0-draft",
+  "status": "draft_screenshot_translation",
+  "source": {
+    "type": "screenshot",
+    "path": "maya/models_screenshots/clinical_profile.png",
+    "extracted_at": "2026-07-08"
+  },
+  "model_kinds": ["data_schema", "guidance_policy", "procedure_candidate"],
+  "nodes": [
+    {"id": "person", "label": "Person", "kind": "entity"},
+    {"id": "cancer_survivor_role", "label": "CancerSurvivorRole", "kind": "entity"},
+    {"id": "clinical_profile", "label": "ClinicalProfile", "kind": "entity"},
+    {"id": "clinical_record", "label": "ClinicalRecord", "kind": "entity"},
+    {"id": "medication_record", "label": "MedicationRecord", "kind": "entity"},
+    {"id": "medication", "label": "Medication", "kind": "entity"},
+    {"id": "clinical_condition_record", "label": "ClinicalConditionRecord", "kind": "entity"},
+    {"id": "clinical_condition", "label": "ClinicalCondition", "kind": "entity"},
+    {"id": "cardiovascular_condition", "label": "CardiovascularCondition", "kind": "entity"},
+    {"id": "metabolic_condition", "label": "MetabolicCondition", "kind": "entity"},
+    {"id": "psychosocial_condition", "label": "PsychosocialCondition", "kind": "entity"},
+    {"id": "late_effect_condition", "label": "LateEffectCondition", "kind": "entity"},
+    {"id": "severity", "label": "Severity", "kind": "entity"},
+    {"id": "clinical_status", "label": "ClinicalStatus", "kind": "entity"},
+    {"id": "clinical_assessment_record", "label": "ClinicalAssessmentRecord", "kind": "entity"},
+    {"id": "clinical_assessment", "label": "ClinicalAssessment", "kind": "entity"},
+    {"id": "measurement_event", "label": "MeasurementEvent", "kind": "entity"},
+    {"id": "timepoint", "label": "Timepoint", "kind": "entity"},
+    {"id": "data_source", "label": "DataSource", "kind": "entity"}
+  ],
+  "relations": [
+    {"id": "person_has_role", "label": "hasRole", "from": "person", "to": "cancer_survivor_role", "kind": "object_property", "confidence": "high"},
+    {"id": "person_has_clinical_profile", "label": "hasClinicalProfile", "from": "person", "to": "clinical_profile", "kind": "object_property", "confidence": "high"},
+    {"id": "clinical_profile_includes_condition_record", "label": "includesConditionRecord", "from": "clinical_profile", "to": "clinical_record", "kind": "object_property", "confidence": "medium"},
+    {"id": "clinical_record_recorded_at", "label": "recordedAt", "from": "clinical_record", "to": "timepoint", "kind": "object_property", "confidence": "high"},
+    {"id": "clinical_record_has_source", "label": "hasSource", "from": "clinical_record", "to": "data_source", "kind": "object_property", "confidence": "high"},
+    {"id": "medication_record_records_medication", "label": "recordsMedication", "from": "medication_record", "to": "medication", "kind": "object_property", "confidence": "high"},
+    {"id": "medication_record_prescribed_for", "label": "prescribedFor", "from": "medication_record", "to": "clinical_condition", "kind": "object_property", "confidence": "high"},
+    {"id": "clinical_condition_record_records_condition", "label": "recordsCondition", "from": "clinical_condition_record", "to": "clinical_condition", "kind": "object_property", "confidence": "high"},
+    {"id": "clinical_condition_record_has_severity", "label": "hasSeverity", "from": "clinical_condition_record", "to": "severity", "kind": "object_property", "confidence": "high"},
+    {"id": "clinical_condition_record_has_clinical_status", "label": "hasClinicalStatus", "from": "clinical_condition_record", "to": "clinical_status", "kind": "object_property", "confidence": "high"},
+    {"id": "clinical_assessment_record_records_assessment", "label": "recordsAssessment", "from": "clinical_assessment_record", "to": "clinical_assessment", "kind": "object_property", "confidence": "high"},
+    {"id": "clinical_assessment_uses_measurement", "label": "usesMeasurement", "from": "clinical_assessment", "to": "measurement_event", "kind": "object_property", "confidence": "high"}
+  ],
+  "taxonomy_groups": [
+    {"id": "clinical_record_subclasses", "parent": "clinical_record", "members": ["medication_record", "clinical_condition_record", "clinical_assessment_record"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "clinical_condition_subclasses", "parent": "clinical_condition", "members": ["cardiovascular_condition", "metabolic_condition", "psychosocial_condition", "late_effect_condition"], "interpretation": "subclass", "confidence": "high"}
+  ],
+  "agent_contracts": {
+    "supervisor": {"usage": "health_routing_and_clinical_memory_update_detection", "inject": "summary only when route or memory update depends on clinical facts"},
+    "health_rag": {"usage": "personal_clinical_context_for_health_reasoning", "inject": "relevant clinical records only, with source and uncertainty labels"},
+    "phyxio_exercise_agent": {"usage": "exercise_safety_context", "inject": "conditions, medications, assessments, and relevant late effects only"}
+  },
+  "procedure_contracts": [
+    {
+      "id": "personal_health_answer_requires_clinical_context_check",
+      "strictness": "candidate_strict",
+      "applies_when": ["user asks a personal health question", "clinical_profile memory may affect safety or relevance"],
+      "required_steps": [
+        "load relevant clinical records before answer generation",
+        "distinguish user-reported records from verified clinical sources",
+        "ask one clarification if a required medication, condition, assessment, timepoint, or source is missing for safe interpretation",
+        "do not infer dose, indication, severity, or clinical status when absent"
+      ]
+    }
+  ],
+  "memory_bindings": [
+    {"path": "clinical_profile.clinical_records", "node": "clinical_record", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {
+      "path": "clinical_profile.medication_records",
+      "node": "medication_record",
+      "cardinality": "many",
+      "temporal": true,
+      "provenance_required": true,
+      "status": "active",
+      "capture": {
+        "properties_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["medication_name"],
+          "properties": {
+            "medication_name": {"type": "string", "minLength": 1, "description": "Medication explicitly identified in the source assertion."},
+            "dose": {"type": "string", "minLength": 1, "description": "Capture only a dose explicitly stated in the source assertion."},
+            "frequency": {"type": "string", "minLength": 1, "description": "Capture only a frequency explicitly stated in the source assertion."},
+            "route": {"type": "string", "minLength": 1, "description": "Capture only an administration route explicitly stated in the source assertion."},
+            "status": {"type": "string", "minLength": 1, "description": "Capture only a medication state explicitly stated as a state in the source assertion. Do not convert starting, taking, prescribing, or another medication action into a status value."},
+            "prescribed_for": {"type": "string", "minLength": 1, "description": "Capture only an indication explicitly stated in the source assertion."}
+          }
+        },
+        "relation_mappings": {
+          "medication_name": "medication_record_records_medication",
+          "prescribed_for": "medication_record_prescribed_for"
+        },
+        "extension_fields": ["dose", "frequency", "route", "status"],
+        "identity_fields": ["medication_name"],
+        "update_mode": "supersede"
+      }
+    },
+    {
+      "path": "clinical_profile.condition_records",
+      "node": "clinical_condition_record",
+      "cardinality": "many",
+      "temporal": true,
+      "provenance_required": true,
+      "status": "active",
+      "capture": {
+        "properties_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["condition_name"],
+          "properties": {
+            "condition_name": {"type": "string", "minLength": 1, "description": "Condition explicitly attributed to the current user."},
+            "severity": {"type": "string", "minLength": 1, "description": "Capture only severity explicitly stated in the source assertion."},
+            "clinical_status": {"type": "string", "minLength": 1, "description": "Capture only clinical status explicitly stated in the source assertion; do not infer current or active status from a diagnosis statement."}
+          }
+        },
+        "relation_mappings": {
+          "condition_name": "clinical_condition_record_records_condition",
+          "severity": "clinical_condition_record_has_severity",
+          "clinical_status": "clinical_condition_record_has_clinical_status"
+        },
+        "extension_fields": [],
+        "identity_fields": ["condition_name"],
+        "update_mode": "supersede"
+      }
+    },
+    {"path": "clinical_profile.assessment_records", "node": "clinical_assessment_record", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"}
+  ],
+  "aliases": [],
+  "review_notes": [
+    "The relation label from ClinicalProfile to ClinicalRecord appears as includesConditionRecord although the target is ClinicalRecord; confirm whether it should be includesClinicalRecord.",
+    "Medication dose, frequency, route, and active/stopped status are not visible in the screenshot; they are marked as application-memory extensions pending a future ontology revision."
+  ]
+}

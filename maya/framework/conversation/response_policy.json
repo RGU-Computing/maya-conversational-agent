@@ -1,0 +1,15 @@
+{
+  "ai_disclosure": "Hi, I'm MAYA, an AI conversational assistant. I'm here to help you explore health information and prepare questions for your care team. I can make mistakes and cannot replace their advice.",
+  "health_disclaimer": "Your health and recovery are personal. I'm an AI and can make mistakes or miss details that matter for you. This information is not a diagnosis or a treatment plan. Your cancer care team can help you decide what fits your situation; check with them before changing treatment or exercise. For urgent symptoms, seek urgent medical help.",
+  "references_heading": "Retrieved references",
+  "health_processing_status": "Let me look into that for you.",
+  "health_processing_delay_seconds": 2.0,
+  "disclaimer_heading": "About this information",
+  "no_references_text": "No references were retrieved for this answer.",
+  "unknown_source_label": "Source title unavailable",
+  "page_label": "PDF page",
+  "privacy_notice_label": "Pilot privacy notice",
+  "privacy_notice_url": null,
+  "clarification_unavailable_text": "I'm having trouble checking the information needed to answer safely. Please try again. For advice about your own treatment or medicines, contact your care team or pharmacist; for urgent symptoms, seek urgent medical help.",
+  "health_output_instruction": "Write only the answer. The application separately displays the retrieved references and adds a health disclaimer. Do not generate a reference list, links, citation markers or a generic disclaimer. Still include any specific uncertainty, limitations of the retrieved evidence and safety guidance needed to answer the question."
+}

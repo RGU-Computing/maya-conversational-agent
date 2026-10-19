@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import queue
 import select
-import uuid
 import atexit
 import fcntl
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -17,20 +19,18 @@ import sounddevice as sd
 import soundfile as sf
 import webrtcvad
 from dotenv import load_dotenv
-from openai import OpenAI, AzureOpenAI, BadRequestError
+from openai import BadRequestError
 import azure.cognitiveservices.speech as speechsdk
 from langgraph.types import Command
 
 ROOT = Path(__file__).resolve().parents[2]
-os.chdir(ROOT)
 
 if __package__ in {None, ""}:
-    sys.path.append(str(ROOT))
-    from utils import strip_markdown, strip_citations_and_references
-    from maya.framework.supervisor.factory import build_supervisor
-else:
-    from .utils import strip_markdown, strip_citations_and_references
-    from .factory import build_supervisor
+    sys.path.append(str(ROOT.parent))
+
+from maya.framework.conversation.personalization import Preferences, SessionConfig, load_session
+from maya.framework.integrations.speech import init_asr, init_tts, transcribe
+from maya.framework.conversation.responses import load_response_policy, response_text
 
 load_dotenv()
 
@@ -51,53 +51,6 @@ VOICE_RATE = int(os.getenv("MAYA_VOICE_SAMPLE_RATE", "16000"))
 PHYXIO_END_INTERACTION_DELAY = float(os.getenv("MAYA_PHYXIO_END_INTERACTION_DELAY", "4.5"))
 
 
-def init_asr() -> tuple[object | None, str | None]:
-    whisper_key = os.getenv("OPENAI_WHISPER_API_KEY")
-    if whisper_key:
-        whisper_model = os.getenv("OPENAI_WHISPER_MODEL", "whisper-1")
-        return OpenAI(api_key=whisper_key), whisper_model
-
-    azure_key = os.getenv("AZURE_OPENAI_WHISPER_API_KEY")
-    azure_endpoint = os.getenv("AZURE_OPENAI_WHISPER_ENDPOINT")
-    azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_WHISPER")
-    azure_version = (
-        os.getenv("AZURE_OPENAI_WHISPER_API_VERSION")
-        or os.getenv("AZURE_OPENAI_API_VERSION")
-        or "2024-06-01"
-    )
-    if azure_key and azure_endpoint and azure_deployment:
-        base_endpoint = (
-            azure_endpoint.split("/openai/")[0]
-            if "/openai/" in azure_endpoint
-            else azure_endpoint
-        )
-        return (
-            AzureOpenAI(
-                api_key=azure_key,
-                api_version=azure_version,
-                azure_endpoint=base_endpoint,
-            ),
-            azure_deployment,
-        )
-
-    return None, None
-
-
-def init_tts() -> speechsdk.SpeechSynthesizer | None:
-    speech_key = os.getenv("AZURE_SPEECH_KEY")
-    speech_region = os.getenv("AZURE_SPEECH_REGION")
-    if not speech_key or not speech_region:
-        return None
-
-    speech_voice = os.getenv("AZURE_SPEECH_VOICE", "en-GB-RyanNeural")
-    speech_config = speechsdk.SpeechConfig(subscription=speech_key, region=speech_region)
-    speech_config.speech_synthesis_voice_name = speech_voice
-    speech_config.set_speech_synthesis_output_format(
-        speechsdk.SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm
-    )
-    return speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
-
-
 def speak(tts: speechsdk.SpeechSynthesizer | None, text: str) -> None:
     if not tts or not text:
         return
@@ -113,25 +66,26 @@ def speak(tts: speechsdk.SpeechSynthesizer | None, text: str) -> None:
         print(f"[tts] {tts_err}")
 
 
-def init_phyxio_io():
+def init_phyxio_io(session: SessionConfig):
     if os.getenv("MAYA_ENABLE_PHYXIO_IO", "1").strip().lower() not in {"1", "true", "yes"}:
         return None
     try:
-        from maya.agents.phyxio_exercise_agent.bridge import get_phyxio_service
+        from maya.framework.integrations.phyxio.bridge import get_phyxio_service
 
-        return get_phyxio_service()
+        return get_phyxio_service(session)
+    except ValueError:
+        raise
     except Exception as phyxio_err:
         print(f"[phyxio] disabled: {phyxio_err}")
         return None
 
 
-def speak_phyxio(phyxio_io, text: str) -> None:
+def speak_phyxio(phyxio_io, text: str, *, speech_text: str | None = None) -> None:
     if not phyxio_io or not text:
         return
     try:
         phyxio_io.show_text(text)
-        set_phyxio_state(phyxio_io, "talking")
-        phyxio_io.speak_text(text)
+        phyxio_io.speak_text(text if speech_text is None else speech_text)
     except Exception as phyxio_err:
         print(f"[phyxio][tts] {phyxio_err}")
 
@@ -163,14 +117,15 @@ def speak_output(
     phyxio_io,
     text: str,
     *,
+    speech_text: str | None = None,
     end_interaction: bool = False,
 ) -> None:
     if phyxio_io is not None:
-        speak_phyxio(phyxio_io, text)
+        speak_phyxio(phyxio_io, text, speech_text=speech_text)
         if end_interaction:
             end_phyxio_interaction(phyxio_io)
     else:
-        speak(tts, text)
+        speak(tts, text if speech_text is None else speech_text)
 
 
 def read_text(
@@ -183,6 +138,7 @@ def read_text(
     *,
     allow_exit: bool = False,
     blank_returns_none: bool = False,
+    preferences: Preferences = Preferences(),
 ) -> str | None:
     if prompt_text:
         speak_output(tts, phyxio_io, prompt_text)
@@ -260,11 +216,7 @@ def read_text(
             wav_file.write(frames)
         buffer.seek(0)
 
-        transcription = asr_client.audio.transcriptions.create(
-            model=asr_model,
-            file=("input.wav", buffer, "audio/wav"),
-        )
-        return (getattr(transcription, "text", None) or "").strip()
+        return transcribe(asr_client, asr_model, buffer, preferences)
 
     while True:
         if phyxio_io is not None:
@@ -331,21 +283,24 @@ def read_text(
         return ""
 
 
-def stream_updates(app, payload, base_config, phyxio_io=None):
+def stream_updates(app, payload, base_config, phyxio_io=None, *, on_health_processing=None):
     final_text = None
     interrupts = []
     seen_health_rag_traces: set[tuple[bool, str, bool, bool]] = set()
 
     set_phyxio_state(phyxio_io, "thinking")
     try:
-        for chunk in app.stream(
+        for _, mode, update in app.stream(
             payload,
             config=base_config,
-            stream_mode="updates",
+            stream_mode=["updates", "custom"],
             subgraphs=True,
         ):
-            update = chunk[1] if isinstance(chunk, tuple) else chunk
             if not isinstance(update, dict):
+                continue
+            if mode == "custom":
+                if update.get("event") == "health_processing_started" and on_health_processing:
+                    on_health_processing()
                 continue
 
             if "__interrupt__" in update:
@@ -386,6 +341,16 @@ def stream_updates(app, payload, base_config, phyxio_io=None):
                 if name:
                     print(f"[{node}] {role} :: {name}")
 
+                if clarification := additional_kwargs.get("clarification"):
+                    print(
+                        "[health_rag] clarification :: "
+                        f"status={clarification['status']} "
+                        f"question_type={clarification.get('question_type', 'unknown')} "
+                        f"needs_clarification={clarification.get('needs_clarification', 'unknown')} "
+                        f"missing_fields={clarification.get('material_missing_fields', [])} "
+                        f"error_type={clarification.get('error_type', 'none')}"
+                    )
+
                 workflow_trace = additional_kwargs.get("workflow_trace")
                 if isinstance(workflow_trace, list):
                     for item in workflow_trace:
@@ -411,7 +376,7 @@ def stream_updates(app, payload, base_config, phyxio_io=None):
                         )
 
                 if role in {"assistant", "ai"} and content:
-                    final_text = content
+                    final_text = response_text(content, additional_kwargs)
     finally:
         set_phyxio_state(phyxio_io, "idle")
 
@@ -430,7 +395,7 @@ def is_tool_call_history_error(err: Exception) -> bool:
 
 def acquire_single_instance_lock():
     lock_path = os.getenv("MAYA_RUN_LOCK", "/tmp/maya_run_with_vad.lock")
-    lock_file = open(lock_path, "w", encoding="utf-8")
+    lock_file = open(lock_path, "a+", encoding="utf-8")
     try:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -454,28 +419,33 @@ def acquire_single_instance_lock():
     return lock_file
 
 
-def main() -> None:
+def build_supervisor():
+    # Keep the existing entry point for the latency runner, without model setup on import.
+    from maya.framework.supervisor.factory import build_supervisor as build
+
+    return build()
+
+
+def main(session: SessionConfig | None = None) -> None:
+    session = session or load_session()
+    load_response_policy()
+    os.chdir(ROOT)
     lock_file = acquire_single_instance_lock()
     if lock_file is None:
         return
     atexit.register(lock_file.close)
 
-    user_id = os.getenv("MAYA_RUN_USER_ID", "test1")
-    thread_id = os.getenv("MAYA_RUN_THREAD_ID") or f"run-{uuid.uuid4().hex[:10]}"
-    base_config = {
-        "configurable": {"thread_id": thread_id, "user_id": user_id},
-        "recursion_limit": 40,
-    }
+    base_config = session.graph_config(thread_id=os.getenv("MAYA_RUN_THREAD_ID"))
 
     app = build_supervisor()
 
-    asr_client, asr_model = init_asr()
+    phyxio_io = init_phyxio_io(session)
+    asr_client, asr_model = (None, None) if phyxio_io is not None else init_asr()
     voice = VoiceConfig(
         seconds=VOICE_SECONDS,
         rate=VOICE_RATE,
     )
-    tts = init_tts()
-    phyxio_io = init_phyxio_io()
+    tts = None if phyxio_io is not None else init_tts(session.preferences)
 
     if phyxio_io is not None:
         print("Type a message or speak from the Phyxio mirror. (Ctrl+C to exit.)")
@@ -494,42 +464,79 @@ def main() -> None:
             phyxio_io,
             allow_exit=True,
             blank_returns_none=True,
+            preferences=session.preferences,
         )
         if user_message is None:
             break
 
         payload = {"messages": [{"role": "user", "content": user_message}]}
 
-        while True:
-            try:
-                final_text, interrupts = stream_updates(app, payload, base_config, phyxio_io)
-            except Exception as err:
-                if is_tool_call_history_error(err):
-                    new_thread = f"run-{uuid.uuid4().hex[:10]}"
-                    base_config["configurable"]["thread_id"] = new_thread
-                    print(
-                        "[runner] recovered from invalid stored tool-call history; "
-                        f"switched to thread_id={new_thread} and retrying."
+        # One acknowledgement per user turn, including graph retries and resumes.
+        with ThreadPoolExecutor(max_workers=1) as speech_worker:
+            progress_announced = False
+
+            def delayed_acknowledgement():
+                nonlocal progress_announced
+                policy = load_response_policy()
+                if response_ready.wait(policy.health_processing_delay_seconds):
+                    return
+                progress_announced = True
+                text = policy.health_processing_status
+                print(f"MAYA: {text}")
+                speak_output(tts, phyxio_io, text)
+
+            def announce_health_processing():
+                nonlocal progress_speech
+                if not progress_announced and progress_speech is None:
+                    progress_speech = speech_worker.submit(delayed_acknowledgement)
+
+            while True:
+                response_ready = Event()
+                progress_speech = None
+                try:
+                    final_text, interrupts = stream_updates(
+                        app, payload, base_config, phyxio_io, on_health_processing=announce_health_processing,
                     )
-                    final_text, interrupts = stream_updates(app, payload, base_config, phyxio_io)
-                else:
-                    raise
-            if interrupts:
-                answers: list[str] = []
-                for interrupt_ in interrupts:
-                    prompt = str(interrupt_.value)
-                    answer = read_text(prompt, tts, asr_client, asr_model, voice, phyxio_io)
-                    answers.append(answer)
-                resume_value = answers[0] if len(answers) == 1 else answers
-                payload = Command(resume=resume_value)
-                continue
-            break
+                except Exception as err:
+                    if is_tool_call_history_error(err):
+                        new_thread = session.graph_config()["configurable"]["thread_id"]
+                        base_config["configurable"]["thread_id"] = new_thread
+                        print(
+                            "[runner] recovered from invalid stored tool-call history; "
+                            f"switched to thread_id={new_thread} and retrying."
+                        )
+                        final_text, interrupts = stream_updates(
+                            app, payload, base_config, phyxio_io, on_health_processing=announce_health_processing,
+                        )
+                    else:
+                        raise
+                finally:
+                    # Cancel a pending acknowledgement; finish one already started.
+                    response_ready.set()
+                    if progress_speech is not None:
+                        progress_speech.result()
+                if interrupts:
+                    answers: list[str] = []
+                    for interrupt_ in interrupts:
+                        prompt = str(interrupt_.value)
+                        answer = read_text(
+                            prompt, tts, asr_client, asr_model, voice, phyxio_io,
+                            preferences=session.preferences,
+                        )
+                        answers.append(answer)
+                    resume_value = answers[0] if len(answers) == 1 else answers
+                    payload = Command(resume=resume_value)
+                    continue
+                break
 
         if final_text:
-            final_text = strip_citations_and_references(strip_markdown(final_text))
-            print(f"\n***************\n\nMAYA: {final_text}")
-            speak_output(tts, phyxio_io, final_text, end_interaction=True)
+            print(f"\n***************\n\nMAYA: {final_text.display_text}")
+            speak_output(tts, phyxio_io, final_text.display_text,
+                         speech_text=final_text.speech_text, end_interaction=True)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run MAYA with optional onboarding settings.")
+    parser.add_argument("--session-config", type=Path, help="JSON participant ID and preferences")
+    args = parser.parse_args()
+    main(load_session(args.session_config))

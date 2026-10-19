@@ -1,0 +1,74 @@
+{
+  "model_id": "social_context",
+  "title": "Social Context",
+  "version": "0.1.0-draft",
+  "status": "draft_screenshot_translation",
+  "source": {
+    "type": "screenshot",
+    "path": "maya/models_screenshots/social_context.png",
+    "extracted_at": "2026-07-08"
+  },
+  "model_kinds": ["data_schema", "guidance_policy"],
+  "nodes": [
+    {"id": "person", "label": "Person", "kind": "entity"},
+    {"id": "social_context_profile", "label": "SocialContextProfile", "kind": "entity"},
+    {"id": "social_context_record", "label": "SocialContextRecord", "kind": "entity"},
+    {"id": "care_plan_activity", "label": "CarePlanActivity", "kind": "entity"},
+    {"id": "dialogue_strategy", "label": "DialogueStrategy", "kind": "entity"},
+    {"id": "behaviour_record", "label": "BehaviourRecord", "kind": "entity"},
+    {"id": "timepoint", "label": "Timepoint", "kind": "entity"},
+    {"id": "data_source", "label": "DataSource", "kind": "entity"},
+    {"id": "social_context_factor", "label": "SocialContextFactor", "kind": "entity"},
+    {"id": "digital_literacy", "label": "DigitalLiteracy", "kind": "entity"},
+    {"id": "health_literacy", "label": "HealthLiteracy", "kind": "entity"},
+    {"id": "support_network", "label": "SupportNetwork", "kind": "entity"},
+    {"id": "socio_economic_factor", "label": "SocioEconomicFactor", "kind": "entity"},
+    {"id": "education_level", "label": "EducationLevel", "kind": "entity"},
+    {"id": "employment_status", "label": "EmploymentStatus", "kind": "entity"},
+    {"id": "cultural_factor", "label": "CulturalFactor", "kind": "entity"},
+    {"id": "barrier_to_care", "label": "BarrierToCare", "kind": "entity"},
+    {"id": "trust_concern", "label": "TrustConcern", "kind": "entity"},
+    {"id": "privacy_concern", "label": "PrivacyConcern", "kind": "entity"}
+  ],
+  "relations": [
+    {"id": "person_has_social_context_profile", "label": "hasSocialContextProfile", "from": "person", "to": "social_context_profile", "kind": "object_property", "confidence": "high"},
+    {"id": "social_context_profile_includes_record", "label": "includesRecord", "from": "social_context_profile", "to": "social_context_record", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_activity_adapted_to_social_context", "label": "adaptedTo", "from": "care_plan_activity", "to": "social_context_record", "kind": "object_property", "confidence": "high"},
+    {"id": "dialogue_strategy_adapted_to_context", "label": "adaptedToContext", "from": "dialogue_strategy", "to": "social_context_record", "kind": "object_property", "confidence": "high"},
+    {"id": "social_context_record_influenced_by_behaviour_record", "label": "influencedBy", "from": "social_context_record", "to": "behaviour_record", "kind": "object_property", "confidence": "high"},
+    {"id": "social_context_record_recorded_at", "label": "recordedAt", "from": "social_context_record", "to": "timepoint", "kind": "object_property", "confidence": "high"},
+    {"id": "social_context_record_has_source", "label": "hasSource", "from": "social_context_record", "to": "data_source", "kind": "object_property", "confidence": "high"},
+    {"id": "social_context_record_records_factor", "label": "recordsFactor", "from": "social_context_record", "to": "social_context_factor", "kind": "object_property", "confidence": "high"}
+  ],
+  "taxonomy_groups": [
+    {"id": "social_context_factor_subclasses", "parent": "social_context_factor", "members": ["digital_literacy", "health_literacy", "support_network", "socio_economic_factor", "cultural_factor", "barrier_to_care"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "socio_economic_factor_subclasses", "parent": "socio_economic_factor", "members": ["education_level", "employment_status"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "barrier_to_care_subclasses", "parent": "barrier_to_care", "members": ["trust_concern", "privacy_concern"], "interpretation": "subclass", "confidence": "high"}
+  ],
+  "agent_contracts": {
+    "supervisor": {"usage": "adapt direct answers and route social-context updates", "inject": "summary only when relevant"},
+    "health_rag": {"usage": "tailor health explanations and identify barriers to care", "inject": "relevant social context factors with source and timepoint"},
+    "phyxio_exercise_agent": {"usage": "adapt exercise instructions and support barriers", "inject": "digital literacy, support network, privacy/trust concerns when relevant"}
+  },
+  "procedure_contracts": [
+    {
+      "id": "adaptation_requires_social_context_source",
+      "strictness": "candidate_soft",
+      "applies_when": ["adapting care-plan activity or dialogue strategy to social context"],
+      "required_steps": [
+        "load the relevant social context record",
+        "check timepoint and source before applying adaptation",
+        "avoid using sensitive factors unless relevant to the user's current request"
+      ]
+    }
+  ],
+  "memory_bindings": [
+    {"path": "social_context.records", "node": "social_context_record", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "social_context.factors", "node": "social_context_factor", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"}
+  ],
+  "aliases": [],
+  "review_notes": [
+    "Sensitive social context facts should be injected minimally and only when relevant.",
+    "The screenshot does not show status/severity fields for barriers or literacy factors."
+  ]
+}

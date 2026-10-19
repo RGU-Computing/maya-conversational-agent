@@ -1,0 +1,4 @@
+{
+  "provider": "dummy",
+  "fixture_path": "sessions.example.json"
+}

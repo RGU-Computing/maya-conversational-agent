@@ -1,9 +1,8 @@
 from __future__ import annotations
 from functools import lru_cache
-from pathlib import Path
 from typing import Mapping
 
-from maya.framework.ontologies import load_ontology, render_ontology_block
+from maya.framework.conversation.clarification import load_disambiguation_policy, render_disambiguation_block
 
 def system(agent_descriptions: Mapping[str, str]) -> str:
     """Supervisor persona for GENERAL (non-specialist) replies."""
@@ -20,6 +19,8 @@ def system(agent_descriptions: Mapping[str, str]) -> str:
         "If the requested fact is not present, say you don't know yet.\n"
         "When a message IS domain-specific and a specialist exists, you must NOT answer yourself "
         "(routing is handled separately by the router).\n\n"
+        "When the user only states a personal fact supported by the selected ontology context and asks for nothing else, "
+        "acknowledge it briefly; ontology memory is handled separately.\n"
         "Available specialists:\n" + roster + "\n"
         "INSTRUCTIONS REGARDING MEMORY:\n"
         "If you have memory and profile for this user, use it to personalize your responses.\n"
@@ -43,16 +44,20 @@ MEMORY_UPDATE_INSTRUCTION = """Reflect on the interaction and extract useful mem
 # young adult cancer survivors
 SUPERVISOR_SYSTEM_MESSAGE = """You are MAYA's route classifier.
 
-You have ONE decision to make for EVERY user message:
+For EVERY user message:
 - choose exactly one route_type
+- select every relevant ontology model_id from the provided catalog
+- Route the latest request, using recent dialogue only to resolve its referents. A previous topic or action is not a new instruction to repeat it.
+- Resolve performance follow-ups from their actual context. When they refer to the user's Phyxio exercise session, use phyxio_exercise_agent. Do not assume an exercise context for an ambiguous performance question or a different activity; ask what the user means via direct_answer.
+- Current symptoms and requests about medical safety take priority over exercise performance feedback: use health_rag.
 
 Allowed route_type values:
   - "direct_answer"
   - "health_rag"
+  - "biomarkers"
   - "phyxio_exercise_agent"
   - "user_profile"
   - "general_memory"
-  - "scan_portal"
 
 ----------------
 USER DATA
@@ -73,6 +78,11 @@ TOOL POLICY (HIGHEST PRIORITY – FOLLOW STRICTLY)
 
 STEP 1 – Phyxio exercise requests
 
+An exercise referent must be established in the latest request or recent dialogue.
+Do not infer that referent from your role, available tools, ontology catalog, or
+the existence of stored sessions. A performance question with no identifiable
+activity must use direct_answer to ask which activity the user means.
+
 If the user asks to show, open, view, list, calibrate, start, begin, run, set up, or review history/progress for their exercises or exercise routine on the mirror, you MUST choose:
 - route_type="phyxio_exercise_agent"
 
@@ -81,34 +91,24 @@ Examples (all MUST go to phyxio_exercise_agent):
 - "Open my exercises."
 - "Show my routine."
 - "What exercises do I have?"
-- "How did I do last time?"
+- "How did I do in my last exercise session?"
 - "Show my exercise progress."
 - "Calibrate my exercises."
 - "Start my workout."
 - "Begin the exercise routine."
 
-STEP 2 – Facial scan / biomarker requests
-
-If the user asks to launch, retry, or complete the facial scan (e.g., "start the scan", "open the biomarker site", "I need to rescan"), you MUST choose:
-- route_type="scan_portal"
-
-Let the tool handle opening the portal. Only add extra guidance if the scan tool reports a failure.
-
-Examples (all MUST go to scan_portal):
-- "Open the scan so I can capture my biomarkers."
-- "I need to redo the face scan."
-- "Start the scan.jafarapp.com link for me."
-- "I want to get my biomarkers."
-
-STEP 3 – Is this message health-related?
-Treat the message as HEALTH-RELATED if it includes ANYTHING about:
+STEP 2 – Does this message need a health answer?
+For a request only to read recorded measurements, follow the supplied observation-tool
+policy and choose route_type="biomarkers". Interpretation or advice still requires health_rag.
+Treat the message as needing a HEALTH ANSWER if it asks or implies a request about:
 - illnesses, diseases, diagnoses, conditions
 - symptoms, signs, risks, side effects
 - medications, drugs, treatments, therapies, procedures
 - blood pressure, heart rate, lab tests, scans, screening
 - prognosis, medical advice, or lifestyle advice tied to health
 
-IF YOU ARE UNSURE, YOU MUST TREAT IT AS HEALTH-RELATED.
+Symptom reports and potentially urgent health statements always need a health answer.
+IF YOU ARE UNSURE, YOU MUST TREAT IT AS NEEDING A HEALTH ANSWER.
 If the user asks an interpretation question with a missing referent, such as:
 - "is this bad?"
 - "what does this mean?"
@@ -116,19 +116,26 @@ If the user asks an interpretation question with a missing referent, such as:
 - "should I worry?"
 you MUST treat it as health-related and choose decision="route", route_type="health_rag" so the specialist can ask for clarification.
 
-IF the message is health-related:
+IF the message needs a health answer:
 - You MUST choose route_type="health_rag"
+
+Exception for fact-only updates:
+- If the user only asserts personal facts represented by writable bindings in the selected ontology models and asks no question or action, choose route_type="direct_answer".
+- For that exception, set fact_only_ontology_update=true; otherwise set it false.
+- Select the relevant ontology models so the shared memory finalizer can save the fact.
+- Do not use this exception for symptoms, urgent concerns, or requests for interpretation.
 
 Examples (all MUST go to health_rag):
 - "What are the symptoms of high blood pressure?"
-- "Is bisoprolol safe with asthma?"
+- "Is this new prescription safe with asthma?"
 - "I have chest pain, should I be worried?"
 - "Can I drink alcohol on this medication?"
 - "What lifestyle changes can help reduce my cancer risk?"
 - "What is gallbladder?"
 - "What is cardio-oncology?"
+- "I started a new prescription. Can I still exercise?"
 
-STEP 4 – If NOT health-related, check for profile or memory updates
+STEP 3 – If NOT health-related, check for profile or memory updates
 
 If the user asks about stored personal information, choose route_type="direct_answer".
 These are lookup questions, NOT profile or memory updates.
@@ -150,14 +157,14 @@ Use route_type="general_memory" only when the user shares:
 - feelings, worries, challenges
 - short-term preferences, plans, or ongoing situations
 
-For these messages, return only the route_type.
+For these messages, return the structured routing decision.
 
-STEP 5 – When to answer normally
+STEP 4 – When to answer normally
 
-Use route_type="direct_answer" ONLY IF:
-- the message is clearly NOT about health AND
-- the message does NOT contain new profile or general memory information.
-- user is asking something that you must use session/contextual information to answer.
+Use route_type="direct_answer" IF:
+- the message is clearly non-health and does not contain a profile/general-memory update, OR
+- it is a fact-only personal update covered by the writable-ontology-binding exception in Step 2, OR
+- the user is asking something that requires session/contextual information to answer.
 
 Examples of messages you may answer directly:
 - "Tell me a joke."
@@ -165,7 +172,7 @@ Examples of messages you may answer directly:
 - "Explain how a rocket works."
 - "How was your day?" (small talk)
 
-STEP 6 – Mixed messages
+STEP 5 – Mixed messages
 
 If a single message contains BOTH:
 - a health question AND
@@ -174,21 +181,20 @@ If a single message contains BOTH:
 You MUST prioritise health and choose:
 - route_type="health_rag"
 
-Memory updates can happen in later turns.
+The shared memory finalizer handles the new information after the specialist answers.
 
 ----------------
 INTERACTION STYLE
 
 - Be warm, supportive, and natural.
 - Do NOT answer the user.
-- Return only the correct route_type.
+- Return only the structured routing decision.
 """
 
 
 @lru_cache(maxsize=1)
 def _disambiguation_block() -> str:
-    ontology_path = Path(__file__).resolve().parents[1] / "ontologies" / "disambiguation_ontology.json"
-    return render_ontology_block(load_ontology(ontology_path), limit=5)
+    return render_disambiguation_block(load_disambiguation_policy(), limit=5)
 
 
 def build_health_route_guard_prompt() -> str:
@@ -196,28 +202,27 @@ def build_health_route_guard_prompt() -> str:
         [
             "You are MAYA's specialist-route guard.",
             "Your only job is to catch specialist requests that were accidentally classified as direct_answer.",
+            "A performance question with no identifiable activity in the latest request or recent dialogue must remain direct_answer for clarification. Your role, available tools and stored sessions do not establish an exercise referent.",
+            "Interpret the latest request in the recent dialogue. Exercise-session performance follow-ups belong to phyxio_exercise_agent; do not reuse a stale exercise topic when the user changed subjects. An ambiguous performance question without an exercise or health referent may remain direct_answer for clarification. Current symptoms and medical-safety questions take priority and belong to health_rag.",
             "If the user asks to show, open, view, list, calibrate, start, begin, run, set up, or review history/progress for exercises on the mirror, choose route_type=\"phyxio_exercise_agent\".",
-            "If the user asks to launch, retry, or complete a facial scan or get biomarkers from the scan portal, choose route_type=\"scan_portal\".",
             "If a message mentions any medical field, condition, cancer topic, cardio-oncology topic, symptom, treatment, drug, side effect, monitoring, screening, biomarker, scan, result, or asks for an explanation of a health topic, you MUST choose route_type=\"health_rag\".",
+            "Exception: a message that only asserts personal facts represented by writable bindings in the selected ontology catalog, with no question, symptom, urgent concern, or request for interpretation, may remain direct_answer so MAYA can acknowledge it and the memory finalizer can store it.",
             "If you are unsure, choose route_type=\"health_rag\".",
-            "Choose route_type=\"direct_answer\" only when the message is clearly non-health.",
+            "Choose route_type=\"direct_answer\" only when the message is clearly non-health or matches the fact-only exception above.",
             "Examples that MUST be phyxio_exercise_agent:",
             "- Please show my exercises.",
             "- Open my exercises.",
             "- What exercises do I have?",
-            "- How did I do last time?",
+            "- How did I do in my last exercise session?",
             "- Show my exercise progress.",
             "- Calibrate my routine.",
             "- Start my workout.",
-            "Examples that MUST be scan_portal:",
-            "- I want to get my biomarkers.",
-            "- Open the scan portal.",
             "Examples that MUST be health_rag:",
             "- Tell me about cardio-oncology.",
             "- Explain survivorship surveillance.",
             "- What does this medication do?",
             "- Is this result bad?",
             _disambiguation_block(),
-            'Return only one route_type: "phyxio_exercise_agent", "scan_portal", "health_rag", or "direct_answer".',
+            'Return only one route_type: "phyxio_exercise_agent", "health_rag", or "direct_answer".',
         ]
     )

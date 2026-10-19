@@ -1,0 +1,102 @@
+{
+  "model_id": "intervention_careplan",
+  "title": "Intervention & Care Plan",
+  "version": "0.1.0-draft",
+  "status": "draft_screenshot_translation",
+  "source": {
+    "type": "screenshot",
+    "path": "maya/models_screenshots/intervention_careplan.png",
+    "extracted_at": "2026-07-08"
+  },
+  "model_kinds": ["data_schema", "procedure_candidate", "guidance_policy"],
+  "nodes": [
+    {"id": "risk_factor", "label": "RiskFactor", "kind": "entity"},
+    {"id": "non_modifiable_risk_factor", "label": "NonModifiableRiskFactor", "kind": "entity"},
+    {"id": "modifiable_risk_factor", "label": "ModifiableRiskFactor", "kind": "entity"},
+    {"id": "intervention", "label": "Intervention", "kind": "entity"},
+    {"id": "exercise_intervention", "label": "ExerciseIntervention", "kind": "entity"},
+    {"id": "nutrition_intervention", "label": "NutritionIntervention", "kind": "entity"},
+    {"id": "health_literacy_intervention", "label": "HealthLiteracyIntervention", "kind": "entity"},
+    {"id": "care_plan_participation", "label": "CarePlanParticipation", "kind": "entity"},
+    {"id": "person_role", "label": "PersonRole", "kind": "entity"},
+    {"id": "care_plan", "label": "CarePlan", "kind": "entity"},
+    {"id": "person", "label": "Person", "kind": "entity"},
+    {"id": "care_plan_status", "label": "CarePlanStatus", "kind": "entity"},
+    {"id": "goal", "label": "Goal", "kind": "entity"},
+    {"id": "care_plan_activity", "label": "CarePlanActivity", "kind": "entity"},
+    {"id": "activity_status", "label": "ActivityStatus", "kind": "entity"},
+    {"id": "schedule", "label": "Schedule", "kind": "entity"},
+    {"id": "frequency", "label": "Frequency", "kind": "entity"},
+    {"id": "timepoint", "label": "Timepoint", "kind": "entity"},
+    {"id": "time_interval", "label": "TimeInterval", "kind": "entity"},
+    {"id": "time_of_day", "label": "TimeOfDay", "kind": "entity"},
+    {"id": "recurrence_pattern", "label": "RecurrencePattern", "kind": "entity"},
+    {"id": "activity_execution", "label": "ActivityExecution", "kind": "entity"},
+    {"id": "measurement_event", "label": "MeasurementEvent", "kind": "entity"},
+    {"id": "performed_exercise_session", "label": "PerformedExerciseSession", "kind": "entity"},
+    {"id": "dialogue_session", "label": "DialogueSession", "kind": "entity"},
+    {"id": "service_use_event", "label": "ServiceUseEvent", "kind": "entity"},
+    {"id": "clinical_assessment", "label": "ClinicalAssessment", "kind": "entity"},
+    {"id": "monitoring_activity", "label": "MonitoringActivity", "kind": "entity"},
+    {"id": "clinical_assessment_activity", "label": "ClinicalAssessmentActivity", "kind": "entity"},
+    {"id": "medical_checkup_activity", "label": "MedicalCheckUpActivity", "kind": "entity"},
+    {"id": "followup_activity", "label": "FollowUpActivity", "kind": "entity"},
+    {"id": "surveillance_activity", "label": "SurveillanceActivity", "kind": "entity"}
+  ],
+  "relations": [
+    {"id": "intervention_targets_modifiable_risk_factor", "label": "targets", "from": "intervention", "to": "modifiable_risk_factor", "kind": "object_property", "confidence": "high"},
+    {"id": "intervention_links_to_care_plan_activity", "label": "unlabeled", "from": "intervention", "to": "care_plan_activity", "kind": "object_property", "confidence": "low"},
+    {"id": "care_plan_has_participation", "label": "hasParticipation", "from": "care_plan", "to": "care_plan_participation", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_participation_has_participant", "label": "hasParticipant", "from": "care_plan_participation", "to": "person", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_participation_has_role", "label": "hasParticipationRole", "from": "care_plan_participation", "to": "person_role", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_intended_for_person", "label": "intendedFor", "from": "care_plan", "to": "person", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_has_status", "label": "hasStatus", "from": "care_plan", "to": "care_plan_status", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_has_goal", "label": "hasGoal", "from": "care_plan", "to": "goal", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_includes_activity", "label": "includes", "from": "care_plan", "to": "care_plan_activity", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_activity_contributes_to_goal", "label": "contributesTo", "from": "care_plan_activity", "to": "goal", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_activity_has_status", "label": "hasStatus", "from": "care_plan_activity", "to": "activity_status", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_activity_has_schedule", "label": "hasSchedule", "from": "care_plan_activity", "to": "schedule", "kind": "object_property", "confidence": "high"},
+    {"id": "care_plan_activity_realised_by_execution", "label": "realisedBy", "from": "care_plan_activity", "to": "activity_execution", "kind": "object_property", "confidence": "high"},
+    {"id": "schedule_has_frequency", "label": "hasFrequency", "from": "schedule", "to": "frequency", "kind": "object_property", "confidence": "high"},
+    {"id": "schedule_next_due_at", "label": "nextDueAt", "from": "schedule", "to": "timepoint", "kind": "object_property", "confidence": "high"},
+    {"id": "schedule_valid_during", "label": "validDuring", "from": "schedule", "to": "time_interval", "kind": "object_property", "confidence": "high"},
+    {"id": "schedule_has_preferred_time_of_day", "label": "hasPreferredTimeOfDay", "from": "schedule", "to": "time_of_day", "kind": "object_property", "confidence": "high"},
+    {"id": "schedule_has_recurrence_pattern", "label": "hasRecurrencePattern", "from": "schedule", "to": "recurrence_pattern", "kind": "object_property", "confidence": "high"}
+  ],
+  "taxonomy_groups": [
+    {"id": "risk_factor_subclasses", "parent": "risk_factor", "members": ["non_modifiable_risk_factor", "modifiable_risk_factor"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "intervention_subclasses", "parent": "intervention", "members": ["exercise_intervention", "nutrition_intervention", "health_literacy_intervention"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "care_plan_activity_other_subclasses", "parent": "care_plan_activity", "members": ["monitoring_activity", "clinical_assessment_activity", "medical_checkup_activity", "followup_activity", "surveillance_activity"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "activity_execution_subclasses", "parent": "activity_execution", "members": ["measurement_event", "performed_exercise_session", "dialogue_session", "service_use_event", "clinical_assessment"], "interpretation": "subclass", "confidence": "high"}
+  ],
+  "agent_contracts": {
+    "supervisor": {"usage": "route care-plan, schedule, goal, and intervention requests", "inject": "current care plan summary when user asks about plan"},
+    "health_rag": {"usage": "care-plan context for health recommendations", "inject": "goals, activities, status, and contraindication-relevant context"},
+    "phyxio_exercise_agent": {"usage": "exercise plan and schedule context", "inject": "exercise-related activities, schedules, and execution status"}
+  },
+  "procedure_contracts": [
+    {
+      "id": "care_plan_activity_execution_sequence",
+      "strictness": "candidate_strict",
+      "applies_when": ["starting, reviewing, or updating a care-plan activity"],
+      "required_steps": [
+        "identify the care plan intended for the person",
+        "select the included care-plan activity",
+        "check activity status and schedule before execution",
+        "record realised activity execution after action",
+        "update status only through a dated activity execution or review"
+      ]
+    }
+  ],
+  "memory_bindings": [
+    {"path": "care_plans.items", "node": "care_plan", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "care_plans.activities", "node": "care_plan_activity", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "care_plans.schedules", "node": "schedule", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "care_plans.executions", "node": "activity_execution", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"}
+  ],
+  "aliases": [],
+  "review_notes": [
+    "The arrow from Intervention to CarePlanActivity appears unlabeled in the screenshot; relation label is set to unlabeled with low confidence.",
+    "CarePlanParticipation appears to connect CarePlan, Person, and PersonRole; confirm whether it is intended as a n-ary participation record."
+  ]
+}

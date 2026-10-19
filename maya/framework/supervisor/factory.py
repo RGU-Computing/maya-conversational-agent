@@ -2,26 +2,28 @@ import uuid
 import json
 import hashlib
 import re
-import webbrowser
 from datetime import datetime
-from pathlib import Path
 from trustcall import create_extractor
-from typing import Optional, Literal, List, Dict, Any, Tuple, TypedDict
+from typing import Optional, Literal, List, Dict, Any, Tuple
 from pydantic import BaseModel, Field
 import importlib
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.messages import merge_message_runs, HumanMessage, SystemMessage, AIMessage, ToolMessage
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, END, START
 from langgraph.store.base import BaseStore
-from langgraph.store.memory import InMemoryStore
 
-# from langchain_openai import ChatOpenAI
-from langchain_openai import AzureChatOpenAI
 from maya.agents.config import load_agent_specs
+from maya.agents.health_rag.agent import ClarificationAssessmentError, DisambiguationDecision
+from maya.framework.integrations.biomarkers import BiomarkerRequest, load_biomarker_service
 from maya.framework.memory import get_postgres_memory   
+from maya.framework.memory.ontology import OntologyMemoryService, OntologyMemoryNotReady
+from maya.framework.integrations.models import get_chat_model
+from maya.framework.conversation.personalization import preferences_from_config
+from maya.framework.conversation.history import recent_dialogue
+from maya.framework.conversation.responses import health_presentation, load_response_policy
+from maya.framework.ontology import get_ontology_registry
 from maya.framework.supervisor.state import SupervisorState
 from dotenv import load_dotenv
 from .prompts import (
@@ -32,15 +34,13 @@ from .prompts import (
     system,
 )
 from langgraph.types import interrupt
-from langchain_ollama import ChatOllama
+from langgraph.config import get_stream_writer
+from langgraph.func import task
 
 load_dotenv()
 
-# model = AzureChatOpenAI(azure_deployment="gpt-4o-mini", temperature=0, api_version="2024-12-01-preview", azure_endpoint="https://mayaagent.openai.azure.com/")
-model = AzureChatOpenAI(azure_deployment="gpt-4.1-mini", temperature=0, api_version="2025-04-01-preview", azure_endpoint="https://socet-air-6721-resource.services.ai.azure.com/")
+model = get_chat_model()
 
-# SCAN_PORTAL_URL = "https://scan.jafarapp.com"
-SCAN_PORTAL_URL = "https://plugin-rc.intelliprove.com/?action_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjp7ImVtYWlsIjoiIiwiY3VzdG9tZXIiOiJTRUxGQkFDSy1ERVYiLCJncm91cCI6InVzZXIiLCJtYXhfbWVhc3VyZW1lbnRfY291bnQiOjk5OTksInVzZXJfaWQiOiJiYzc1OTY0MzBjZWE0OTEyYTdmNTI5NzczN2Q4ZmFhYSIsImF1dGgwX3VzZXJfaWQiOm51bGx9LCJtZXRhIjp7fSwiZXhwIjoxNzYzNTgzNDc3fQ.siccXuZLfbw4wdMryddlCovL0PZOya7tsKlhVIHr1hI&language=en&duration=30"
 
 def _load_agents() -> Tuple[List[Any], Dict[str, str]]:
     specs = load_agent_specs()
@@ -61,35 +61,50 @@ def _load_agents() -> Tuple[List[Any], Dict[str, str]]:
     return agents, descriptions
 
 
-class AmbiguityDetection(TypedDict):
-    """Ambiguity detection result from the model."""
-    is_ambiguous: bool
-    clarification_question: Optional[str]
-
-class UserClarification(TypedDict):
-    """User clarification response."""
-    clarification: str
-
 class SupervisorRouteDecision(BaseModel):
     """Validated supervisor route decision for the current turn."""
 
+    question_subject: Literal["current_user", "other", "general", "unknown"] = Field(
+        default="unknown",
+        description=("Whose health or measurements the question concerns: current_user for the signed-in user, "
+                     "other for another person, general for educational questions about no particular person, "
+                     "unknown when unresolved or not a health request. Identify the subject from the question "
+                     "and dialogue, never from the existence of stored user records."),
+    )
     route_type: Literal[
         "direct_answer",
         "user_profile",
         "general_memory",
         "health_rag",
-        "scan_portal",
+        "biomarkers",
         "phyxio_exercise_agent",
     ] = Field(
-        description="Choose exactly one route. Use direct_answer only for non-health turns that do not require profile or memory storage."
+        description=(
+            "Choose exactly one route. direct_answer also covers messages that only assert a personal fact "
+            "supported by a selected writable ontology binding; the memory finalizer stores it."
+        )
+    )
+    biomarker_request: BiomarkerRequest | None = None
+    selected_ontology_models: list[str] = Field(
+        description="Every relevant model_id from the supplied ontology catalog; use an empty list when none apply."
+    )
+    fact_only_ontology_update: bool = Field(
+        default=False,
+        description=(
+            "True only when the message solely asserts personal facts represented by writable bindings "
+            "in selected_ontology_models and asks no question or action."
+        ),
     )
 
 
 class HealthRouteGuardDecision(BaseModel):
     """Validation pass to prevent specialist requests from falling through to direct answers."""
 
-    route_type: Literal["direct_answer", "health_rag", "scan_portal", "phyxio_exercise_agent"] = Field(
-        description="Choose a specialist route for health, scan, or exercise requests; otherwise direct_answer."
+    route_type: Literal["direct_answer", "health_rag", "phyxio_exercise_agent"] = Field(
+        description="Choose a specialist route for health or exercise requests; otherwise direct_answer."
+    )
+    exercise_reference: str = Field(
+        default="", description="For an exercise override, quote exact dialogue text explicitly naming an exercise, routine or exercise operation. Performance alone does not name an activity. Return an empty string if absent or for other routes."
     )
 
 class Memory(BaseModel):
@@ -127,7 +142,24 @@ profile_extractor = create_extractor(
 
 
 
-def build_supervisor():
+def build_supervisor(*, biomarker_service=None):
+    biomarkers = biomarker_service or load_biomarker_service()
+
+    def clinical_context(user_id, agent_id, model_ids, subject):
+        if agent_id == "health_rag" and subject != "current_user":
+            return ontology_registry.render_context(agent_id, model_ids), ""
+        return ontology_memory.load_context(user_id=user_id, agent_id=agent_id, model_ids=model_ids)
+
+    def memory_unavailable(selected_models):
+        return {
+            "messages": [AIMessage(
+                content=ontology_registry.runtime["memory_policy"]["recovery_unavailable_text"],
+                additional_kwargs={"source": "ontology_memory", "memory_status": "pending",
+                                   "selected_ontology_models": selected_models},
+            )],
+            "route_type": "direct_answer", "selected_ontology_models": selected_models,
+            "resolved_user_input": "", "biomarker_results": [],
+        }
     def _latest_user_message(messages: list[Any]) -> HumanMessage | None:
         for message in reversed(messages):
             if isinstance(message, HumanMessage):
@@ -203,43 +235,93 @@ def build_supervisor():
         else:
             general_memory = "No general memories."
 
-        system_msg = SUPERVISOR_SYSTEM_MESSAGE.format(user_profile=user_profile, general_memory=general_memory, time=datetime.now().isoformat())
+        system_msg = "\n\n".join(
+            [
+                SUPERVISOR_SYSTEM_MESSAGE.format(
+                    user_profile=user_profile,
+                    general_memory=general_memory,
+                    time=datetime.now().isoformat(),
+                ),
+                ontology_registry.catalog_for_agent("supervisor"),
+                biomarkers.catalog_context(),
+            ]
+        )
 
         latest_user = _latest_user_message(state["messages"])
-        routing_messages = [SystemMessage(content=system_msg)]
-        if latest_user is not None:
-            routing_messages.append(latest_user)
+        dialogue = recent_dialogue(state["messages"])
+        routing_messages = [SystemMessage(content=system_msg), *dialogue]
 
         decision = model.with_structured_output(SupervisorRouteDecision, strict=True).invoke(
             routing_messages
         )
 
-        if isinstance(decision, SupervisorRouteDecision) and decision.route_type == "direct_answer" and latest_user is not None:
+        initially_selected = ontology_registry.resolve_model_ids(
+            decision.selected_ontology_models
+        )
+        if (
+            isinstance(decision, SupervisorRouteDecision)
+            and decision.fact_only_ontology_update
+            and ontology_registry.has_active_bindings(initially_selected)
+        ):
+            decision = decision.model_copy(update={"route_type": "direct_answer"})
+
+        if (
+            isinstance(decision, SupervisorRouteDecision)
+            and decision.route_type == "direct_answer"
+            and latest_user is not None
+        ):
             health_guard = model.with_structured_output(HealthRouteGuardDecision, strict=True).invoke(
                 [
                     SystemMessage(content=build_health_route_guard_prompt()),
-                    latest_user,
+                    *dialogue,
                 ]
             )
+            if health_guard.route_type == "phyxio_exercise_agent" and not (
+                health_guard.exercise_reference.strip()
+                and any(health_guard.exercise_reference in str(message.content) for message in dialogue)
+            ):
+                health_guard = health_guard.model_copy(update={"route_type": "direct_answer"})
             if isinstance(health_guard, HealthRouteGuardDecision) and health_guard.route_type != "direct_answer":
-                decision = SupervisorRouteDecision(route_type=health_guard.route_type)
+                decision = decision.model_copy(update={"route_type": health_guard.route_type})
 
-        if isinstance(decision, SupervisorRouteDecision) and decision.route_type != "direct_answer":
-            return {"route_type": decision.route_type}
+        route_type = decision.route_type
+        agent_id = route_type if route_type in {"health_rag", "phyxio_exercise_agent"} else "supervisor"
+        selected_models = ontology_registry.resolve_model_ids(
+            decision.selected_ontology_models,
+            agent_id=agent_id,
+        )
+        try:
+            ontology_context, _ = clinical_context(user_id, agent_id, selected_models, decision.question_subject)
+        except OntologyMemoryNotReady:
+            return memory_unavailable(selected_models)
+        resolved_user_input = latest_user.content.strip() if latest_user is not None else ""
+        turn_update = {
+            "route_type": route_type,
+            "selected_ontology_models": selected_models,
+            "ontology_context": ontology_context,
+            "question_subject": decision.question_subject,
+            "resolved_user_input": resolved_user_input,
+            # Each user turn starts with a fresh lookup; never inherit another turn's values.
+            "biomarker_results": biomarkers.fetch(user_id, decision.biomarker_request, [])
+            if route_type in {"health_rag", "biomarkers"} and decision.question_subject == "current_user" else [],
+        }
+
+        if route_type != "direct_answer":
+            return turn_update
 
         answer_messages = [
             SystemMessage(
                 content=system(agent_descriptions=agent_descriptions).format(
                     memory=general_memory,
                     profile=user_profile,
-                    personal_instructions="",
+                    personal_instructions=ontology_context,
                 )
+                + preferences_from_config(config).response_style()
             )
         ]
-        if latest_user is not None:
-            answer_messages.append(latest_user)
+        answer_messages.extend(dialogue)
         response = model.invoke(answer_messages)
-        return {"messages": [response], "route_type": "direct_answer"}
+        return {"messages": [response], **turn_update}
 
     def update_memory(state: SupervisorState, config: RunnableConfig, store: BaseStore):
 
@@ -316,58 +398,77 @@ def build_supervisor():
                 )
         return {"messages": [AIMessage(content="Thanks, I'll remember that.")]}
 
-    def scan_portal_node(
-        state: SupervisorState,
-        config: RunnableConfig,
-        store: BaseStore,
-    ) -> Dict[str, List[Any]]:
-        """Launch the facial scan portal for biomarker capture."""
+    def biomarker_readout(state: SupervisorState, config: RunnableConfig):
+        results = state.get("biomarker_results") or []
+        response = model.invoke([
+            SystemMessage(content=biomarkers.config.readout_instruction
+                          + "\n\n" + biomarkers.config.context_instruction
+                          + preferences_from_config(config).response_style()),
+            HumanMessage(content=json.dumps({"question": state.get("resolved_user_input"),
+                                            "lookup_results": results})),
+        ], config=config)
+        return {"messages": [AIMessage(
+            content=biomarkers.label_answer(response.content, results),
+            additional_kwargs={"source": "biomarkers", "biomarker_results": results},
+        )]}
 
-        def send(text: str) -> Dict[str, List[Any]]:
-            text = (text or "").strip() or "Scan portal ready."
-            return {"messages": [AIMessage(content=text)]}
-
-        url = SCAN_PORTAL_URL
-        if isinstance(config, dict):
-            configurable = config.get("configurable")
-            if isinstance(configurable, dict):
-                url = configurable.get("scan_url", url) or url
-
-        try:
-            launched = webbrowser.open(url, new=2, autoraise=True)
-            error_text = None
-        except Exception as exc:
-            launched = False
-            error_text = str(exc)
-
-        if launched:
-            message = (
-                f"I've opened {url} in your browser. After starting the scan, keep your face centered and "
-                "follow the scan instructions so we can capture the biomarkers. I'll be here when you're done!"
+    @task
+    def assess_health_clarification(question: str, conversation_context: str,
+                                  ontology_context: str, response_style: str,
+                                  user_id: str, results: list[dict], subject: str) -> dict[str, Any]:
+        """Checkpoint assessment and optional lookup together across clarification resume."""
+        def assess(allow_lookup=True):
+            return agent_by_name["health_rag"].assess_clarification(
+                question, model=model, conversation_context=conversation_context,
+                ontology_context=ontology_context, response_style=response_style,
+                biomarker_catalog=biomarkers.catalog_context(results) if subject == "current_user" else "",
+                biomarker_context=biomarkers.render_context(results),
+                allow_biomarker_lookup=allow_lookup and subject == "current_user",
             )
-        else:
-            message = (
-                f"I couldn't automatically open {url}. "
-                "Please open it manually and follow the on-screen prompts."
-            )
-            if error_text:
-                message += f"\n\n(Reason: {error_text})"
-
-        return send(message)
+        decision = assess()
+        if (subject == "current_user" and decision.biomarker_request and decision.biomarker_request.subject == "current_user"
+                and decision.biomarker_request.measurement_ids and not decision.urgent_safety_bypass):
+            results = biomarkers.fetch(user_id, decision.biomarker_request, results)
+            decision = assess(allow_lookup=False)
+        return {"decision": decision.model_dump(mode="json"), "biomarkers": results}
 
     def health_rag_node(
         state: SupervisorState,
         config: RunnableConfig,
         store: BaseStore,
-    ) -> Dict[str, List[Any]]:
+    ) -> dict[str, Any]:
         """Answer medical questions from the local literature corpus."""
         messages = state["messages"]
-        def send(text: str, trace: dict[str, Any] | None = None) -> Dict[str, List[Any]]:
-            text = (text or "").strip() or "Health specialist completed without response."
-            extra = {"source": "health_rag"}
+        selected_models = ontology_registry.resolve_model_ids(
+            state.get("selected_ontology_models") or [],
+            agent_id="health_rag",
+        )
+        clarification_trace: dict[str, Any] = {}
+        subject = state.get("question_subject", "unknown")
+        biomarker_results = (state.get("biomarker_results") or []) if subject == "current_user" else []
+
+        def send(
+            text: str,
+            trace: dict[str, Any] | None = None,
+            *,
+            resolved_input: str = "",
+        ) -> dict[str, Any]:
+            text = (text or "").strip() or agent.config.messages.empty_response
+            text = biomarkers.label_answer(text, biomarker_results)
+            extra = {"source": "health_rag", "biomarker_results": biomarker_results}
+            if clarification_trace:
+                extra["clarification"] = clarification_trace
             if trace:
                 extra["workflow_trace"] = [trace]
-            return {"messages": [AIMessage(content=text, additional_kwargs=extra)]}
+                extra["presentation"] = health_presentation(text, trace.get("citations", []))
+            update: dict[str, Any] = {
+                "messages": [AIMessage(content=text, additional_kwargs=extra)],
+                "selected_ontology_models": selected_models,
+                "biomarker_results": biomarker_results,
+            }
+            if resolved_input:
+                update["resolved_user_input"] = resolved_input
+            return update
 
         # Latest user question
         human_messages = [m for m in messages if isinstance(m, HumanMessage)]
@@ -375,22 +476,42 @@ def build_supervisor():
         if not question:
             question = "Please answer the user's latest health question."
         health_context = _recent_health_context(messages)
+        preferences = preferences_from_config(config)
+        user_id = config["configurable"]["user_id"]
+        try:
+            ontology_context, ontology_memory_context = clinical_context(user_id, "health_rag", selected_models, subject)
+        except OntologyMemoryNotReady:
+            return memory_unavailable(selected_models)
         agent = agent_by_name.get("health_rag")
         if agent is None:
-            return send("Health specialist not available right now.")
+            return send(load_response_policy().clarification_unavailable_text, resolved_input=question)
 
-        prompt = agent.draft_clarification_question(
-            question,
-            model=model,
-            conversation_context=health_context,
+        get_stream_writer()({"event": "health_processing_started"})
+        try:
+            assessed = assess_health_clarification(
+                question, health_context, ontology_context, preferences.response_style(),
+                user_id, biomarker_results, subject,
+            ).result()
+            biomarker_results = assessed["biomarkers"]
+            clarification_decision = DisambiguationDecision.model_validate(assessed["decision"])
+        except ClarificationAssessmentError as error:
+            clarification_trace.update(status="error", selected_ontology_models=selected_models,
+                                       error_type=type(error.__cause__ or error).__name__)
+            return send(load_response_policy().clarification_unavailable_text)
+        clarification_trace.update(
+            status="assessed", selected_ontology_models=selected_models, question_subject=subject,
+            **clarification_decision.model_dump(mode="json"),
         )
-        clarification = interrupt(prompt)
-        if isinstance(clarification, list):
-            clarification = clarification[0] if clarification else ""
-        clarification_text = str(clarification or "").strip()
-        if not clarification_text:
-            return send(prompt)
-        question = f"Original question: {question}\nUser clarification: {clarification_text}"
+        if clarification_decision.needs_clarification:
+            prompt = clarification_decision.clarification_question.strip()
+            clarification = interrupt(biomarkers.label_answer(prompt, biomarker_results))
+            if isinstance(clarification, list):
+                clarification = clarification[0] if clarification else ""
+            clarification_text = str(clarification or "").strip()
+            if not clarification_text:
+                return send(prompt, resolved_input=question)
+            clarification_trace["status"] = "clarified"
+            question = f"Original question: {question}\nClarification asked: {prompt}\nUser clarification: {clarification_text}"
 
         standalone_question = (
             f"{health_context}\n\nCurrent user question: {question}"
@@ -398,17 +519,18 @@ def build_supervisor():
             else question
         )
 
-        user_id = config["configurable"]["user_id"]
         namespace = ("health_rag", user_id, "qa_history")
         normalized_query = " ".join(re.sub(r"[^a-z0-9]+", " ", standalone_question.lower()).split())
-        summary_key = f"summary:{hashlib.sha256(normalized_query.encode('utf-8')).hexdigest()[:16]}"
+        style_key = agent.cache_scope(preferences.response_style(), ontology_context, ontology_memory_context)
+        summary_key = f"summary:{style_key}:{hashlib.sha256(normalized_query.encode('utf-8')).hexdigest()[:16]}"
 
-        exact_item = store.get(namespace, summary_key)
+        allow_cache = not biomarker_results and not clarification_decision.urgent_safety_bypass
+        exact_item = store.get(namespace, summary_key) if allow_cache else None
         if exact_item is not None:
             value = getattr(exact_item, "value", {})
             if isinstance(value, dict) and value.get("summary"):
                 return send(
-                    f"We discussed something similar before. {value['summary']}",
+                    f"{agent.config.messages.cached_answer_prefix} {value['summary']}",
                     {
                         "stage": "health_rag",
                         "tool_name": "health_rag_tool",
@@ -419,11 +541,15 @@ def build_supervisor():
                         "retrieval_used": False,
                         "summary_stored": False,
                         "query": standalone_question,
-                        "citations": value.get("citations", [])[:2],
+                        "citations": value.get("citations", []),
                     },
+                    resolved_input=question,
                 )
 
-        semantic_items = store.search(namespace, query=question, filter={"type": "health_rag_summary"}, limit=1)
+        semantic_items = [] if not allow_cache else store.search(
+            namespace, query=question,
+            filter={"type": "health_rag_summary", "response_style": style_key}, limit=1,
+        )
         if semantic_items:
             semantic_item = semantic_items[0]
             semantic_value = getattr(semantic_item, "value", {})
@@ -441,11 +567,11 @@ def build_supervisor():
             if (
                 isinstance(semantic_value, dict)
                 and semantic_value.get("summary")
-                and semantic_score >= 0.82
-                and token_overlap >= 0.6
+                and semantic_score >= agent.config.cache.semantic_score_threshold
+                and token_overlap >= agent.config.cache.token_overlap_threshold
             ):
                 return send(
-                    f"We discussed something similar before. {semantic_value['summary']}",
+                    f"{agent.config.messages.cached_answer_prefix} {semantic_value['summary']}",
                     {
                         "stage": "health_rag",
                         "tool_name": "health_rag_tool",
@@ -456,25 +582,35 @@ def build_supervisor():
                         "retrieval_used": False,
                         "summary_stored": False,
                         "query": standalone_question,
-                        "citations": semantic_value.get("citations", [])[:2],
+                        "citations": semantic_value.get("citations", []),
                     },
+                    resolved_input=question,
                 )
 
         result = agent.agent.invoke(
             {
                 "messages": [HumanMessage(content=question)],
                 "conversation_context": health_context,
-                "standalone_question": standalone_question,
+                "ontology_context": ontology_context,
+                "ontology_memory_context": ontology_memory_context,
+                "biomarker_context": biomarkers.render_context(biomarker_results),
+                "standalone_question": question,
+                "needs_query_rewrite": clarification_trace.get("status") == "clarified",
+                "urgent_safety_bypass": clarification_decision.urgent_safety_bypass,
+                "response_style": preferences.response_style(),
             },
             config={"recursion_limit": 10},
         )
         answer_message = result["messages"][-1] if isinstance(result, dict) else None
         answer_text = getattr(answer_message, "content", "") if answer_message is not None else ""
-        citations = result.get("citations", [])[:2] if isinstance(result, dict) else []
+        citations = result.get("citations", []) if isinstance(result, dict) else []
 
-        summary_text = str(answer_text or "").strip() or "I could not find a relevant answer for that question in the current local literature set."
+        summary_text = (
+            str(answer_text or "").strip()
+            or agent.config.messages.no_evidence
+        )
         summary_stored = False
-        if citations and answer_text:
+        if citations and answer_text and not biomarker_results:
             store.put(
                 namespace,
                 summary_key,
@@ -486,6 +622,7 @@ def build_supervisor():
                     "summary": summary_text,
                     "citations": citations,
                     "type": "health_rag_summary",
+                    "response_style": style_key,
                 },
                 index=["query", "normalized_query", "summary"],
             )
@@ -500,39 +637,73 @@ def build_supervisor():
                 "memory_lookup": "miss",
                 "memory_namespace": list(namespace),
                 "memory_key": summary_key,
-                "retrieval_used": True,
+                "retrieval_used": result.get("retrieval_used", True) if isinstance(result, dict) else False,
                 "summary_stored": summary_stored,
                 "query": standalone_question,
+                "retrieval_query": result.get("retrieval_query", "") if isinstance(result, dict) else "",
                 "citations": citations,
             },
+            resolved_input=question,
         )
+
+    def schedule_ontology_memory_update(
+        state: SupervisorState,
+        config: RunnableConfig,
+    ) -> dict[str, str]:
+        """Queue ontology extraction without adding latency or a user-visible message."""
+
+        latest_user = _latest_user_message(state.get("messages") or [])
+        source_text = str(state.get("resolved_user_input") or "").strip()
+        if not source_text and latest_user is not None:
+            source_text = str(latest_user.content or "").strip()
+        configurable = config.get("configurable") or {}
+        user_id = str(configurable.get("user_id") or "")
+        thread_id = str(configurable.get("thread_id") or "")
+        if latest_user is not None and getattr(latest_user, "id", None):
+            source_message_id = str(latest_user.id)
+        else:
+            digest = hashlib.sha256(f"{thread_id}|{source_text}".encode("utf-8")).hexdigest()[:20]
+            source_message_id = f"message:{digest}"
+
+        scheduled = bool(user_id and thread_id) and ontology_memory.schedule(
+            user_id=user_id,
+            thread_id=thread_id,
+            source_message_id=source_message_id,
+            source_text=source_text,
+            model_ids=state.get("selected_ontology_models") or [],
+        )
+        return {"memory_update_status": "scheduled" if scheduled else "skipped"}
 
     def route_message(
         state: SupervisorState,
-        config: RunnableConfig,
-        store: BaseStore,
-    ) -> Literal[END, "update_profile", "update_memory", "health_rag", "scan_portal", "phyxio_exercise_agent"]:
+    ) -> Literal[
+        "schedule_ontology_memory_update",
+        "update_profile",
+        "update_memory",
+        "health_rag",
+        "biomarker_readout",
+        "phyxio_exercise_agent",
+    ]:
 
         """
         Use this tool to decide where to route the user’s request:
         - 'health_rag' for ANY medical/health-related question
         - 'user_profile' for stable personal facts
         - 'general_memory' for experiences / events / feelings
-        - 'scan_portal' when the user asks to run the facial scan.
         - 'phyxio_exercise_agent' when the user asks to show, open, list, calibrate, start, or review exercise history/progress.
         """
 
         route_type = state.get("route_type")
         if route_type == "direct_answer" or not route_type:
-            return END
+            return "schedule_ontology_memory_update"
         if route_type == "user_profile":
             return "update_profile"
         if route_type == "general_memory":
             return "update_memory"
         if route_type == "health_rag":
             return "health_rag"
-        if route_type == "scan_portal":
-            return "scan_portal"
+        if route_type == "biomarkers":
+            return "biomarker_readout"
         if route_type == "phyxio_exercise_agent":
             return "phyxio_exercise_agent"
         raise ValueError(f"Unknown supervisor route_type: {route_type}")
@@ -541,6 +712,8 @@ def build_supervisor():
 
 
     store, checkpointer = get_postgres_memory()
+    ontology_registry = get_ontology_registry()
+    ontology_memory = OntologyMemoryService(model=model, store=store, registry=ontology_registry)
     agents, agent_descriptions = _load_agents()
     agent_by_name = {a.name: a for a in agents}
     # Create the graph + all nodes
@@ -550,21 +723,23 @@ def build_supervisor():
     builder.add_node(supervisor)
     builder.add_node(update_profile)
     builder.add_node(update_memory)
-    builder.add_node("scan_portal", scan_portal_node)
 
     for agent in agents:
         if agent.name != "health_rag":
             builder.add_node(agent.name, agent)
 
     builder.add_node("health_rag", health_rag_node)
+    builder.add_node("biomarker_readout", biomarker_readout)
+    builder.add_node("schedule_ontology_memory_update", schedule_ontology_memory_update)
 
     builder.add_edge(START, "supervisor")
     builder.add_conditional_edges("supervisor", route_message)
-    builder.add_edge("update_profile", END)
-    builder.add_edge("update_memory", END)
-    builder.add_edge("scan_portal", END)
-    builder.add_edge("health_rag", END)
-    builder.add_edge("phyxio_exercise_agent", END)
+    builder.add_edge("update_profile", "schedule_ontology_memory_update")
+    builder.add_edge("update_memory", "schedule_ontology_memory_update")
+    builder.add_edge("health_rag", "schedule_ontology_memory_update")
+    builder.add_edge("biomarker_readout", "schedule_ontology_memory_update")
+    builder.add_edge("phyxio_exercise_agent", "schedule_ontology_memory_update")
+    builder.add_edge("schedule_ontology_memory_update", END)
 
 
     # We compile the graph with the checkpointer and store

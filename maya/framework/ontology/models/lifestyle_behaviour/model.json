@@ -1,0 +1,69 @@
+{
+  "model_id": "lifestyle_behaviour",
+  "title": "Lifestyle & Behaviour",
+  "version": "0.1.0-draft",
+  "status": "draft_screenshot_translation",
+  "source": {
+    "type": "screenshot",
+    "path": "maya/models_screenshots/lifestyle_behaviour.png",
+    "extracted_at": "2026-07-08"
+  },
+  "model_kinds": ["data_schema", "guidance_policy"],
+  "nodes": [
+    {"id": "person", "label": "Person", "kind": "entity"},
+    {"id": "cancer_survivor_role", "label": "CancerSurvivorRole", "kind": "entity"},
+    {"id": "lifestyle_profile", "label": "LifestyleProfile", "kind": "entity"},
+    {"id": "behaviour_record", "label": "BehaviourRecord", "kind": "entity"},
+    {"id": "timepoint", "label": "Timepoint", "kind": "entity"},
+    {"id": "behaviour_status", "label": "BehaviourStatus", "kind": "entity"},
+    {"id": "care_plan_activity", "label": "CarePlanActivity", "kind": "entity"},
+    {"id": "lifestyle_behaviour", "label": "LifestyleBehaviour", "kind": "entity"},
+    {"id": "modifiable_risk_factor", "label": "ModifiableRiskFactor", "kind": "entity"},
+    {"id": "nutrition_behaviour", "label": "NutritionBehaviour", "kind": "entity"},
+    {"id": "physical_activity_behaviour", "label": "PhysicalActivityBehaviour", "kind": "entity"},
+    {"id": "sedentary_behaviour", "label": "SedentaryBehaviour", "kind": "entity"},
+    {"id": "sleep_behaviour", "label": "SleepBehaviour", "kind": "entity"},
+    {"id": "smoking_behaviour", "label": "SmokingBehaviour", "kind": "entity"},
+    {"id": "adherence_behaviour", "label": "AdherenceBehaviour", "kind": "entity"}
+  ],
+  "relations": [
+    {"id": "person_has_role", "label": "hasRole", "from": "person", "to": "cancer_survivor_role", "kind": "object_property", "confidence": "high"},
+    {"id": "person_has_lifestyle_profile", "label": "hasLifestyleProfile", "from": "person", "to": "lifestyle_profile", "kind": "object_property", "confidence": "high"},
+    {"id": "lifestyle_profile_includes_behaviour_record", "label": "includesBehaviourRecord", "from": "lifestyle_profile", "to": "behaviour_record", "kind": "object_property", "confidence": "high"},
+    {"id": "behaviour_record_recorded_at", "label": "recordedAt", "from": "behaviour_record", "to": "timepoint", "kind": "object_property", "confidence": "high"},
+    {"id": "behaviour_record_has_status", "label": "hasBehaviourStatus", "from": "behaviour_record", "to": "behaviour_status", "kind": "object_property", "confidence": "high"},
+    {"id": "behaviour_record_relates_to_activity", "label": "relatesToActivity", "from": "behaviour_record", "to": "care_plan_activity", "kind": "object_property", "confidence": "high"},
+    {"id": "behaviour_record_records_behaviour", "label": "recordsBehaviour", "from": "behaviour_record", "to": "lifestyle_behaviour", "kind": "object_property", "confidence": "high"},
+    {"id": "lifestyle_behaviour_influences_modifiable_risk_factor", "label": "influences", "from": "lifestyle_behaviour", "to": "modifiable_risk_factor", "kind": "object_property", "confidence": "high"}
+  ],
+  "taxonomy_groups": [
+    {"id": "lifestyle_behaviour_subclasses", "parent": "lifestyle_behaviour", "members": ["nutrition_behaviour", "physical_activity_behaviour", "sedentary_behaviour", "sleep_behaviour", "smoking_behaviour", "adherence_behaviour"], "interpretation": "subclass", "confidence": "high"}
+  ],
+  "agent_contracts": {
+    "supervisor": {"usage": "detect lifestyle memory updates and route lifestyle health questions", "inject": "summary when direct answer or route depends on behavior facts"},
+    "health_rag": {"usage": "lifestyle context for health evidence answers", "inject": "only relevant behavior records with recorded time and status"},
+    "phyxio_exercise_agent": {"usage": "activity/adherence context", "inject": "physical activity, sedentary, sleep, and adherence records when relevant"}
+  },
+  "procedure_contracts": [
+    {
+      "id": "behaviour_change_answer_requires_current_status",
+      "strictness": "candidate_soft",
+      "applies_when": ["answering personalized lifestyle or behavior-change questions"],
+      "required_steps": [
+        "load latest relevant behaviour records",
+        "check recorded timepoint and behaviour status",
+        "link to care-plan activity only when a relation is recorded",
+        "do not assume current behavior from old records without noting uncertainty"
+      ]
+    }
+  ],
+  "memory_bindings": [
+    {"path": "lifestyle.behaviour_records", "node": "behaviour_record", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "lifestyle.behaviours", "node": "lifestyle_behaviour", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"}
+  ],
+  "aliases": [],
+  "review_notes": [
+    "No DataSource relation is visible for BehaviourRecord in this screenshot; provenance is still required by MAYA memory design.",
+    "BehaviourStatus values are not visible and should be defined later."
+  ]
+}

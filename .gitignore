@@ -5,12 +5,12 @@ Thumbs.db
 *.swo
 .idea/
 .vscode/
+.claude/
 
 # ---- Python bytecode / caches ----
 __pycache__/
 *.py[cod]
 *.pyo
-*.pyd
 *.pyd
 *.so
 *.dll
@@ -19,7 +19,6 @@ __pycache__/
 .venv/
 venv/
 env/
-.python-version
 
 # ---- Build / packaging ----
 build/
@@ -31,6 +30,9 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.uv-cache/
+.dspy_cache/
+.chroma-health/
 .pyre/
 .pytype/
 .coverage
@@ -44,11 +46,17 @@ htmlcov/
 logfile
 logs/
 *.log
+interactions.txt
+/maya/artifacts/
+/.codex-tmp/
+/output/
 
 # ---- Local config / secrets (if you add them) ----
 .env
 .env.*
 *.env
+!.env.example
+/maya/session.json
 
 # ---- UV / lockfiles (keep uv.lock if you want reproducible envs) ----
 # uv.lock

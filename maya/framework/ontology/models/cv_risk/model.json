@@ -1,0 +1,78 @@
+{
+  "model_id": "cv_risk",
+  "title": "Cardiovascular Risk & Prediction",
+  "version": "0.1.0-draft",
+  "status": "draft_screenshot_translation",
+  "source": {
+    "type": "screenshot",
+    "path": "maya/models_screenshots/cv_risk.png",
+    "extracted_at": "2026-07-08"
+  },
+  "model_kinds": ["data_schema", "procedure_candidate", "guidance_policy"],
+  "nodes": [
+    {"id": "person", "label": "Person", "kind": "entity"},
+    {"id": "cancer_survivor_role", "label": "CancerSurvivorRole", "kind": "entity"},
+    {"id": "model_execution", "label": "ModelExecution", "kind": "entity"},
+    {"id": "prediction_model", "label": "PredictionModel", "kind": "entity"},
+    {"id": "model_input", "label": "ModelInput", "kind": "entity"},
+    {"id": "person_attribute", "label": "PersonAttribute", "kind": "entity"},
+    {"id": "clinical_condition_record", "label": "ClinicalConditionRecord", "kind": "entity"},
+    {"id": "observation_result", "label": "ObservationResult", "kind": "entity"},
+    {"id": "treatment_exposure", "label": "TreatmentExposure", "kind": "entity"},
+    {"id": "timepoint", "label": "Timepoint", "kind": "entity"},
+    {"id": "risk_profile", "label": "RiskProfile", "kind": "entity"},
+    {"id": "care_plan", "label": "CarePlan", "kind": "entity"},
+    {"id": "time_interval", "label": "TimeInterval", "kind": "entity"},
+    {"id": "risk_estimate", "label": "RiskEstimate", "kind": "entity"},
+    {"id": "clinical_condition", "label": "ClinicalCondition", "kind": "entity"},
+    {"id": "adverse_cardiac_event", "label": "AdverseCardiacEvent", "kind": "entity"}
+  ],
+  "relations": [
+    {"id": "person_has_role", "label": "hasRole", "from": "person", "to": "cancer_survivor_role", "kind": "object_property", "confidence": "high"},
+    {"id": "person_has_risk_profile", "label": "hasRiskProfile", "from": "person", "to": "risk_profile", "kind": "object_property", "confidence": "high"},
+    {"id": "risk_profile_assessed_at", "label": "assessedAt", "from": "risk_profile", "to": "timepoint", "kind": "object_property", "confidence": "high"},
+    {"id": "risk_profile_valid_during", "label": "validDuring", "from": "risk_profile", "to": "time_interval", "kind": "object_property", "confidence": "high"},
+    {"id": "risk_profile_includes_risk_estimate", "label": "includesRiskEstimate", "from": "risk_profile", "to": "risk_estimate", "kind": "object_property", "confidence": "high"},
+    {"id": "risk_profile_informs_care_plan", "label": "informs", "from": "risk_profile", "to": "care_plan", "kind": "object_property", "confidence": "high"},
+    {"id": "risk_estimate_estimates_condition_risk", "label": "estimatesRiskOf", "from": "risk_estimate", "to": "clinical_condition", "kind": "object_property", "confidence": "high"},
+    {"id": "risk_estimate_estimates_adverse_event_risk", "label": "estimatesRiskOf", "from": "risk_estimate", "to": "adverse_cardiac_event", "kind": "object_property", "confidence": "high"},
+    {"id": "model_execution_executes_model", "label": "executes", "from": "model_execution", "to": "prediction_model", "kind": "object_property", "confidence": "high"},
+    {"id": "model_execution_uses_input", "label": "usesInput", "from": "model_execution", "to": "model_input", "kind": "object_property", "confidence": "high"},
+    {"id": "model_execution_executed_at", "label": "executedAt", "from": "model_execution", "to": "timepoint", "kind": "object_property", "confidence": "high"},
+    {"id": "model_execution_generates_risk_profile", "label": "generates", "from": "model_execution", "to": "risk_profile", "kind": "object_property", "confidence": "high"},
+    {"id": "model_input_includes_person_attribute", "label": "includesPersonAttribute", "from": "model_input", "to": "person_attribute", "kind": "object_property", "confidence": "high"},
+    {"id": "model_input_includes_clinical_record", "label": "includesClinicalRecord", "from": "model_input", "to": "clinical_condition_record", "kind": "object_property", "confidence": "high"},
+    {"id": "model_input_derived_from_observation_result", "label": "derivedFrom", "from": "model_input", "to": "observation_result", "kind": "object_property", "confidence": "high"},
+    {"id": "model_input_includes_exposure", "label": "includesExposure", "from": "model_input", "to": "treatment_exposure", "kind": "object_property", "confidence": "high"}
+  ],
+  "taxonomy_groups": [],
+  "agent_contracts": {
+    "supervisor": {"usage": "route risk-profile questions and updates", "inject": "risk-profile summary only when asked"},
+    "health_rag": {"usage": "risk interpretation context", "inject": "risk estimates, validity window, model provenance, and care-plan linkage"},
+    "phyxio_exercise_agent": {"usage": "exercise risk guardrail context", "inject": "only active/relevant risk estimates and care-plan restrictions"}
+  },
+  "procedure_contracts": [
+    {
+      "id": "risk_profile_generation_sequence",
+      "strictness": "candidate_strict",
+      "applies_when": ["generating or interpreting a cardiovascular risk profile"],
+      "required_steps": [
+        "collect model inputs from person attributes, clinical records, observation results, and treatment exposures",
+        "execute a named prediction model",
+        "record execution timepoint",
+        "generate a risk profile with risk estimates and validity interval",
+        "link risk profile to care plan only after risk estimate generation"
+      ]
+    }
+  ],
+  "memory_bindings": [
+    {"path": "cv_risk.model_executions", "node": "model_execution", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "cv_risk.risk_profiles", "node": "risk_profile", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "cv_risk.risk_estimates", "node": "risk_estimate", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"}
+  ],
+  "aliases": [],
+  "review_notes": [
+    "RiskEstimate has two visible estimatesRiskOf relations, one to ClinicalCondition and one to AdverseCardiacEvent.",
+    "Model input field definitions are not visible; later memory schemas should preserve raw input provenance."
+  ]
+}

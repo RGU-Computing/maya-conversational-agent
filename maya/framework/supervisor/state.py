@@ -11,13 +11,19 @@ class SupervisorState(TypedDict):
 
     # Optional
     active_agent: NotRequired[str]
+    selected_ontology_models: NotRequired[list[str]]
+    ontology_context: NotRequired[str]
+    question_subject: NotRequired[Literal["current_user", "other", "general", "unknown"]]
+    biomarker_results: NotRequired[list[dict]]
+    resolved_user_input: NotRequired[str]
+    memory_update_status: NotRequired[str]
     route_type: NotRequired[
         Literal[
             "direct_answer",
             "user_profile",
             "general_memory",
             "health_rag",
-            "scan_portal",
+            "biomarkers",
             "phyxio_exercise_agent",
         ]
     ]

@@ -1,0 +1,188 @@
+{
+  "ontology_name": "disambiguation",
+  "version": "0.6.0",
+  "scope": "Literature-grounded dialogue guidance for clarification and scope disambiguation in health conversations, including cardiovascular toxicity and cardiovascular health after cancer treatment.",
+  "source_basis": [
+    {
+      "source_id": "bickmore_2011_health_counseling_ontology",
+      "citation": "Bickmore TW, Schulman D, Sidner C. A reusable framework for health counseling dialogue systems based on a behavioral medicine ontology. J Biomed Inform. 2011;44(2):183-197.",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/21220044/"
+    },
+    {
+      "source_id": "amith_2019_phido",
+      "citation": "Amith M, et al. Conceiving an application ontology to model patient human papillomavirus vaccine counseling for dialogue management. J Biomed Inform. 2019;100:103312.",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/31865902/"
+    },
+    {
+      "source_id": "gilligan_2017_asco_communication",
+      "citation": "Gilligan T, et al. Patient-Clinician Communication: American Society of Clinical Oncology Consensus Guideline. J Clin Oncol. 2017;35(31):3618-3632.",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/28892432/"
+    },
+    {
+      "source_id": "dorfman_2022_symptom_communication",
+      "citation": "Dorfman CS, et al. Symptom Communication Preferences and Communication Barriers for Young Adult Cancer Survivors and Their Health Care Providers. J Adolesc Young Adult Oncol. 2022;11(5):506-517.",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/35049386/"
+    },
+    {
+      "source_id": "mclaughlin_2019_adolescent_symptom_communication",
+      "citation": "McLaughlin CA, et al. Factors Affecting Adolescents' Willingness to Communicate Symptoms During Cancer Treatment: A Systematic Review from the Children's Oncology Group. J Adolesc Young Adult Oncol. 2019;8(2):105-113.",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/30489196/"
+    },
+    {
+      "source_id": "maas_2026_information_needs",
+      "citation": "Maas A, et al. Information needs of adult childhood, adolescent, and young adult cancer survivors (CAYACS): A systematic review. Patient Educ Couns. 2026.",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/41655359/"
+    },
+    {
+      "source_id": "curigliano_2020_cardio_oncology",
+      "citation": "Curigliano G, et al. Management of cardiac disease in cancer patients throughout oncological treatment: ESMO consensus recommendations. Ann Oncol. 2020;31(2):171-190.",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/31959335/",
+      "corpus_document_id": "1-s2.0-S0923753419360806-main"
+    },
+    {
+      "source_id": "schardt_2007_pico",
+      "citation": "Schardt C, Adams MB, Owens T, Keitz S, Fontelo P. Utilization of the PICO framework to improve searching PubMed for clinical questions. BMC Med Inform Decis Mak. 2007;7:16.",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/17573961/"
+    },
+    {
+      "source_id": "huang_2006_pico_evaluation",
+      "citation": "Huang X, Lin J, Demner-Fushman D. Evaluation of PICO as a knowledge representation for clinical questions. AMIA Annu Symp Proc. 2006:359-363.",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/17238363/"
+    }
+  ],
+  "entities": [
+    {
+      "concept_id": "disambiguation.adaptive_picot_completeness",
+      "label": "Adaptive PICOT Question Completeness",
+      "provenance_type": "literature_grounded",
+      "source_refs": [
+        "schardt_2007_pico",
+        "huang_2006_pico_evaluation"
+      ],
+      "evidence_summary": "PICO can focus clinical questions and evidence retrieval, but evaluations show that a full PICO frame is not equally suitable for every clinical information need; completeness must therefore be task-sensitive rather than an all-fields-required checklist.",
+      "prompt_rules": [
+        "Represent the question adaptively as P (population or problem), I (intervention or exposure), C (comparator), O (outcome or goal), and T (timeframe), marking each component present, resolved from context, missing, or not required for this task.",
+        "Do not require every PICOT component. For general education, a named health topic satisfies the population/problem component; do not demand an age, diagnosis, or patient profile merely to tailor general information. Comparator is required only for an actual comparison, and timeframe is required only when timing could change interpretation or retrieval.",
+        "Resolve PICOT components from the current query, recent conversation, and ontology or user-profile context before declaring a component missing.",
+        "Clarify only a missing required component whose possible values could materially change interpretation, retrieval, safety guidance, or the substantive answer. Ask for the single highest-value gap."
+      ]
+    },
+    {
+      "concept_id": "disambiguation.scope_and_agenda",
+      "label": "Scope and Agenda Elicitation",
+      "provenance_type": "literature_grounded",
+      "source_refs": [
+        "bickmore_2011_health_counseling_ontology",
+        "amith_2019_phido",
+        "gilligan_2017_asco_communication"
+      ],
+      "evidence_summary": "Health dialogue systems and oncology communication guidance treat agenda-setting and information gathering as explicit dialogue tasks before counseling or education is delivered.",
+      "prompt_rules": [
+        "Default to answering when the user names a health topic and asks an identifiable question or requests an identifiable kind of help. A request to judge safety, suitability, compatibility, effectiveness, or risk already states the user's goal; do not ask them to restate it.",
+        "Clarify the user's goal only when neither the current turn nor recent context makes the intended task clear enough for a useful and safe answer."
+      ]
+    },
+    {
+      "concept_id": "disambiguation.missing_clinical_referent",
+      "label": "Missing Clinical Referent",
+      "provenance_type": "literature_grounded",
+      "source_refs": [
+        "dorfman_2022_symptom_communication",
+        "mclaughlin_2019_adolescent_symptom_communication",
+        "gilligan_2017_asco_communication"
+      ],
+      "evidence_summary": "Young adult and adolescent oncology communication studies emphasize direct, specific, and probing questions when symptoms or concerns are not yet concrete enough to interpret safely.",
+      "prompt_rules": [
+        "Ask for clarification when the user refers to this, that, it, a symptom, a treatment effect, or a test result without naming it specifically enough for a safe answer.",
+        "When the concern is vague, ask a specific follow-up that elicits the missing symptom, biomarker, timeframe, or treatment context."
+      ]
+    },
+    {
+      "concept_id": "disambiguation.general_vs_personal_scope",
+      "label": "General Versus Personal Scope",
+      "provenance_type": "literature_grounded",
+      "source_refs": [
+        "dorfman_2022_symptom_communication",
+        "maas_2026_information_needs",
+        "gilligan_2017_asco_communication"
+      ],
+      "evidence_summary": "Cancer survivorship communication literature highlights the need for individualized, patient-centered information and explicit elicitation of what kind of help the patient wants.",
+      "prompt_rules": [
+        "Answer genuine general education questions without asking for optional personal details. Do not turn a question about whether something is suitable or safe for a particular person into general education to avoid missing required information.",
+        "Determine scope from the whole request, not its opening words or the presence of a named health topic. Questions about medication suitability, safety, compatibility, or treatment-dependent management for the user or another specific person require the relevant clinical context.",
+        "Ask one focused question only when a specific missing personal detail would materially change the safety, meaning, or conclusion of the requested interpretation."
+      ]
+    },
+    {
+      "concept_id": "disambiguation.developmentally_appropriate_followup",
+      "label": "Developmentally Appropriate Follow-Up",
+      "provenance_type": "literature_grounded",
+      "source_refs": [
+        "dorfman_2022_symptom_communication",
+        "maas_2026_information_needs"
+      ],
+      "evidence_summary": "AYA survivorship literature emphasizes concise, personalized, developmentally appropriate information rather than generic information dumps.",
+      "prompt_rules": [
+        "After clarification, answer in a concise, user-friendly way that reflects the user's background and concern instead of listing raw citations or article titles.",
+        "Tailor the explanation to the user's situation and avoid overloading them with literature-style phrasing."
+      ]
+    },
+    {
+      "concept_id": "disambiguation.safe_non_answer_and_handoff",
+      "label": "Safe Non-Answer and Handoff",
+      "provenance_type": "literature_grounded",
+      "source_refs": [
+        "amith_2019_phido",
+        "gilligan_2017_asco_communication",
+        "bickmore_2011_health_counseling_ontology"
+      ],
+      "evidence_summary": "Published health dialogue models include explicit non-answer and information-gathering behaviors when the system cannot yet respond safely.",
+      "prompt_rules": [
+        "If the system still lacks enough information after an initial clarification opportunity, acknowledge the uncertainty and ask one focused follow-up rather than guessing.",
+        "Use HITL review or escalation when ambiguity affects safety, urgency, or the choice between reassurance and triage.",
+        "Do not delay immediate safety or escalation guidance for urgent symptoms while waiting for clarification."
+      ]
+    },
+    {
+      "concept_id": "disambiguation.cardio_oncology_treatment_exposure",
+      "label": "Cardio-Oncology Treatment Exposure Context",
+      "provenance_type": "literature_grounded",
+      "source_refs": [
+        "curigliano_2020_cardio_oncology"
+      ],
+      "evidence_summary": "Cardiovascular toxicity risk and monitoring depend on the anticancer treatment, exposure, timing, and the person's cardiovascular context.",
+      "prompt_rules": [
+        "For personalized medication suitability, safety, compatibility, cardiotoxicity-risk, or surveillance questions, first resolve the relevant treatment exposures from the current query, conversation, and the person's recorded treatment history. A named medicine alone does not identify the other treatments it is being assessed against, but relevant treatment information already in memory must be used rather than asked for again. Ask one focused question only if the relevant exposure remains missing or ambiguous.",
+        "Past cancer-treatment records remain relevant to survivorship questions; age of a record alone does not make it unusable. An unambiguous recorded treatment may resolve a reference to 'my treatments' without reconfirmation. Do not use a past exposure as evidence of a newly mentioned or current treatment that has not been identified, or infer a complete current medication list. Clarify when the requested judgement depends on that unresolved distinction, and never borrow the user's history for a friend or relative.",
+        "Do not request treatment details before genuine general education or definitions that do not judge an intervention's suitability for a particular person."
+      ]
+    },
+    {
+      "concept_id": "disambiguation.cardio_oncology_test_interpretation",
+      "label": "Cardiac Test and Biomarker Interpretation Context",
+      "provenance_type": "literature_grounded",
+      "source_refs": [
+        "curigliano_2020_cardio_oncology"
+      ],
+      "evidence_summary": "Cardio-oncology monitoring uses named measures such as LVEF, GLS, troponin, and natriuretic peptides, often interpreted with values, timing, and serial or baseline comparison.",
+      "prompt_rules": [
+        "When the user requests interpretation of their own cardiac imaging or biomarker after cancer treatment but does not identify the test or result, ask one focused question for the most important missing test name or value.",
+        "When the cardiac measure and value are already identified, provide its general significance and appropriate follow-up limits without asking for optional details merely to personalize the answer further."
+      ]
+    },
+    {
+      "concept_id": "disambiguation.cardio_oncology_symptom_context",
+      "label": "Post-Treatment Cardiovascular Symptom Context",
+      "provenance_type": "literature_grounded",
+      "source_refs": [
+        "curigliano_2020_cardio_oncology",
+        "dorfman_2022_symptom_communication"
+      ],
+      "evidence_summary": "A symptom-attribution question requires knowing the symptom and its timing, while named urgent cardiopulmonary symptoms require immediate safety guidance.",
+      "prompt_rules": [
+        "If a cancer survivor asks whether an unnamed or vague personal symptom is cardiotoxicity, ask one focused question that identifies the symptom and, when necessary, when it began relative to treatment.",
+        "If potentially urgent symptoms such as current chest pain or shortness of breath are already named, do not delay immediate safety guidance with clarification."
+      ]
+    }
+  ]
+}

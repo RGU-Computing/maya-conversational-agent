@@ -1,3 +1,4 @@
 --find-links /usr/share/libphyxio-connect/dist/
-zeroc-ice
-libphyxio_connect
+# UCLM 26.5.29 uses the Ice 3.7 API; 3.8 is not source compatible.
+zeroc-ice>=3.7.11,<3.8
+libphyxio_connect==26.5.29

@@ -1,0 +1,12 @@
+{
+  "provider": "dummy",
+  "synthetic_notice": "",
+  "catalog": {
+    "blood_pressure": "Blood pressure: systolic and diastolic components, with measurement context.",
+    "blood_glucose": "Blood glucose, including specimen and fasting context when supplied."
+  },
+  "patient_map": {
+    "participant-001": "synthetic-patient"
+  },
+  "fixture_path": "observations.example.json"
+}

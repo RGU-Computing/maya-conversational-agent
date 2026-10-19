@@ -1,0 +1,78 @@
+{
+  "model_id": "knowledge_resource",
+  "title": "Guideline & Knowledge Resource",
+  "version": "0.1.0-draft",
+  "status": "draft_screenshot_translation",
+  "source": {
+    "type": "screenshot",
+    "path": "maya/models_screenshots/knowledge_resource.png",
+    "extracted_at": "2026-07-08"
+  },
+  "model_kinds": ["guidance_policy", "procedure_candidate", "data_schema"],
+  "nodes": [
+    {"id": "evidence_statement", "label": "EvidenceStatement", "kind": "entity"},
+    {"id": "knowledge_resource", "label": "KnowledgeResource", "kind": "entity"},
+    {"id": "guideline", "label": "Guideline", "kind": "entity"},
+    {"id": "education_resource", "label": "EducationResource", "kind": "entity"},
+    {"id": "evidence_source", "label": "EvidenceSource", "kind": "entity"},
+    {"id": "policy_recommendation", "label": "PolicyRecommendation", "kind": "entity"},
+    {"id": "clinical_protocol", "label": "ClinicalProtocol", "kind": "entity"},
+    {"id": "recommendation", "label": "Recommendation", "kind": "entity"},
+    {"id": "applicability_criterion", "label": "ApplicabilityCriterion", "kind": "entity"},
+    {"id": "care_plan_activity", "label": "CarePlanActivity", "kind": "entity"},
+    {"id": "contraindication", "label": "Contraindication", "kind": "entity"},
+    {"id": "evidence_grade", "label": "EvidenceGrade", "kind": "entity"},
+    {"id": "recommendation_derivation", "label": "RecommendationDerivation", "kind": "entity"},
+    {"id": "risk_profile", "label": "RiskProfile", "kind": "entity"},
+    {"id": "prediction_model", "label": "PredictionModel", "kind": "entity"},
+    {"id": "conversation_agent", "label": "ConversationAgent", "kind": "entity"},
+    {"id": "recommendation_review", "label": "RecommendationReview", "kind": "entity"},
+    {"id": "person", "label": "Person", "kind": "entity"}
+  ],
+  "relations": [
+    {"id": "knowledge_resource_contains_evidence_statement", "label": "containsEvidenceStatement", "from": "knowledge_resource", "to": "evidence_statement", "kind": "object_property", "confidence": "high"},
+    {"id": "knowledge_resource_contains_or_supports_recommendation", "label": "containsOrSupports", "from": "knowledge_resource", "to": "recommendation", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_has_applicability_criterion", "label": "hasApplicabilityCriterion", "from": "recommendation", "to": "applicability_criterion", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_recommends_care_plan_activity", "label": "recommends", "from": "recommendation", "to": "care_plan_activity", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_has_contraindication", "label": "hasContraindication", "from": "recommendation", "to": "contraindication", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_has_evidence_grade", "label": "hasEvidenceGrade", "from": "recommendation", "to": "evidence_grade", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_derivation_uses_knowledge_resource", "label": "usesKnowledgeResource", "from": "recommendation_derivation", "to": "knowledge_resource", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_derivation_uses_risk_profile", "label": "usesRiskProfile", "from": "recommendation_derivation", "to": "risk_profile", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_derivation_uses_model", "label": "usesModel", "from": "recommendation_derivation", "to": "prediction_model", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_derivation_performed_by_agent", "label": "performedByAgent", "from": "recommendation_derivation", "to": "conversation_agent", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_derivation_produces_recommendation", "label": "produces", "from": "recommendation_derivation", "to": "recommendation", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_review_reviews_recommendation", "label": "reviews", "from": "recommendation_review", "to": "recommendation", "kind": "object_property", "confidence": "high"},
+    {"id": "recommendation_review_reviewed_by_person", "label": "reviewedBy", "from": "recommendation_review", "to": "person", "kind": "object_property", "confidence": "high"}
+  ],
+  "taxonomy_groups": [
+    {"id": "knowledge_resource_subclasses", "parent": "knowledge_resource", "members": ["guideline", "education_resource", "evidence_source", "policy_recommendation", "clinical_protocol"], "interpretation": "subclass", "confidence": "high"}
+  ],
+  "agent_contracts": {
+    "supervisor": {"usage": "route recommendation, guideline, and resource questions", "inject": "not usually needed except when explaining recommendation provenance"},
+    "health_rag": {"usage": "evidence and recommendation provenance", "inject": "knowledge resource, evidence statements, applicability, contraindications, and evidence grade"},
+    "phyxio_exercise_agent": {"usage": "exercise recommendation provenance", "inject": "only care-plan activity recommendations relevant to exercise"}
+  },
+  "procedure_contracts": [
+    {
+      "id": "recommendation_derivation_requires_evidence_and_applicability",
+      "strictness": "candidate_strict",
+      "applies_when": ["agent gives a personalized recommendation or care-plan activity suggestion"],
+      "required_steps": [
+        "identify knowledge resource or evidence statement supporting the recommendation",
+        "check applicability criterion against user context",
+        "check contraindications",
+        "include evidence grade when available",
+        "record whether recommendation was derived by an agent and whether it was reviewed by a person"
+      ]
+    }
+  ],
+  "memory_bindings": [
+    {"path": "knowledge.recommendation_derivations", "node": "recommendation_derivation", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "knowledge.recommendation_reviews", "node": "recommendation_review", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"}
+  ],
+  "aliases": [],
+  "review_notes": [
+    "This model may represent global knowledge resources rather than user memory; user-specific storage should focus on derivations, recommendations shown, and reviews.",
+    "The screenshot does not show publication dates, citations, or evidence-grade value sets."
+  ]
+}

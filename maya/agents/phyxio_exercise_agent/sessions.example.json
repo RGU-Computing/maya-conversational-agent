@@ -1,0 +1,146 @@
+[
+  {
+    "user_id": "participant-001",
+    "session_id": "session-01",
+    "routine_id": "routine-seated",
+    "routine_name": "Seated movement routine",
+    "comparison_key": "seated-march-plan-v1",
+    "ended_at": "2026-10-01T09:00:00Z",
+    "status": "completed",
+    "source": "Synthetic exercise-session fixture",
+    "metrics": {
+      "seated_march_repetitions": {
+        "label": "Seated march repetitions",
+        "value": 12,
+        "unit": "repetitions",
+        "target": 20
+      },
+      "duration": {
+        "label": "Session duration",
+        "value": 185,
+        "unit": "seconds",
+        "target": 300
+      }
+    }
+  },
+  {
+    "user_id": "participant-001",
+    "session_id": "session-03",
+    "routine_id": "routine-seated",
+    "routine_name": "Seated movement routine",
+    "comparison_key": "seated-march-plan-v1",
+    "ended_at": "2026-10-03T09:00:00Z",
+    "status": "completed",
+    "source": "Synthetic exercise-session fixture",
+    "metrics": {
+      "seated_march_repetitions": {
+        "label": "Seated march repetitions",
+        "value": 14,
+        "unit": "repetitions",
+        "target": 20
+      },
+      "duration": {
+        "label": "Session duration",
+        "value": 195,
+        "unit": "seconds",
+        "target": 300
+      }
+    }
+  },
+  {
+    "user_id": "participant-001",
+    "session_id": "session-05",
+    "routine_id": "routine-seated",
+    "routine_name": "Seated movement routine",
+    "comparison_key": "seated-march-plan-v1",
+    "ended_at": "2026-10-05T09:00:00Z",
+    "status": "completed",
+    "source": "Synthetic exercise-session fixture",
+    "metrics": {
+      "seated_march_repetitions": {
+        "label": "Seated march repetitions",
+        "value": 15,
+        "unit": "repetitions",
+        "target": 20
+      },
+      "duration": {
+        "label": "Session duration",
+        "value": 205,
+        "unit": "seconds",
+        "target": 300
+      }
+    }
+  },
+  {
+    "user_id": "participant-001",
+    "session_id": "session-07",
+    "routine_id": "routine-seated",
+    "routine_name": "Seated movement routine",
+    "comparison_key": "seated-march-plan-v1",
+    "ended_at": "2026-10-07T09:00:00Z",
+    "status": "completed",
+    "source": "Synthetic exercise-session fixture",
+    "metrics": {
+      "seated_march_repetitions": {
+        "label": "Seated march repetitions",
+        "value": 16,
+        "unit": "repetitions",
+        "target": 20
+      },
+      "duration": {
+        "label": "Session duration",
+        "value": 215,
+        "unit": "seconds",
+        "target": 300
+      }
+    }
+  },
+  {
+    "user_id": "participant-001",
+    "session_id": "session-09",
+    "routine_id": "routine-seated",
+    "routine_name": "Seated movement routine",
+    "comparison_key": "seated-march-plan-v1",
+    "ended_at": "2026-10-09T09:00:00Z",
+    "status": "completed",
+    "source": "Synthetic exercise-session fixture",
+    "metrics": {
+      "seated_march_repetitions": {
+        "label": "Seated march repetitions",
+        "value": 18,
+        "unit": "repetitions",
+        "target": 20
+      },
+      "duration": {
+        "label": "Session duration",
+        "value": 225,
+        "unit": "seconds",
+        "target": 300
+      }
+    }
+  },
+  {
+    "user_id": "participant-001",
+    "session_id": "session-12",
+    "routine_id": "routine-seated",
+    "routine_name": "Seated movement routine",
+    "comparison_key": "seated-march-plan-v1",
+    "ended_at": "2026-10-12T09:00:00Z",
+    "status": "completed",
+    "source": "Synthetic exercise-session fixture",
+    "metrics": {
+      "seated_march_repetitions": {
+        "label": "Seated march repetitions",
+        "value": 20,
+        "unit": "repetitions",
+        "target": 20
+      },
+      "duration": {
+        "label": "Session duration",
+        "value": 240,
+        "unit": "seconds",
+        "target": 300
+      }
+    }
+  }
+]

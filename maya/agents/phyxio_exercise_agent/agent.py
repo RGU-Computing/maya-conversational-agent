@@ -2,28 +2,78 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Mapping, Sequence
+from collections import Counter
+from typing import Any, Dict, Literal, Mapping, Sequence
 
 from dotenv import load_dotenv
-from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from maya.framework.conversation.personalization import preferences_from_config
+from maya.framework.conversation.history import recent_dialogue
 from langchain_core.tools import BaseTool, tool
-from langchain_openai import AzureChatOpenAI
-from .bridge import get_phyxio_service
+from langchain_core.runnables import RunnableConfig
+from pydantic import BaseModel, Field
+
+from maya.framework.integrations.phyxio.bridge import get_phyxio_service
+from .sessions import get_latest_exercise_session, load_session_service
+from .phyxio_sessions import PhyxioSessionProvider
+from maya.framework.integrations.models import get_chat_model
 
 load_dotenv()
 
 AGENT_ID = "phyxio_exercise_agent"
-DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_TOOLS: Sequence[str] = (
     "show_exercises",
     "calibrate_exercises",
     "start_exercises",
     "list_exercises",
     "get_exercise_history",
+    "get_latest_exercise_session",
 )
 ROUTINE_ID = os.getenv("MAYA_PHYXIO_ROUTINE_ID", "").strip()
-FALLBACK_ROUTINE_ID = "6"
+
+ExerciseToolName = Literal[
+    "show_exercises",
+    "calibrate_exercises",
+    "start_exercises",
+    "list_exercises",
+    "get_exercise_history",
+    "get_latest_exercise_session",
+    "none",
+]
+
+
+class ExerciseActionDecision(BaseModel):
+    """Validated semantic decision made before any Phyxio action is executed."""
+
+    action: ExerciseToolName = Field(
+        description="The single Phyxio tool to execute, or none when no action should run.",
+    )
+    session_subject: Literal["current_user", "other", "unknown"] = Field(
+        default="unknown", description="Whose session is being reviewed; resolve from current dialogue, never assume another person's session belongs to the participant."
+    )
+    safety_hold: bool = Field(
+        description="True when the user's current context makes executing an exercise action unsafe.",
+    )
+    needs_clarification: bool = Field(
+        description="True when one concise follow-up is required before selecting an action.",
+    )
+    reason: str = Field(
+        description="A brief internal explanation based on the complete meaning of the request.",
+    )
+    user_response: str = Field(
+        description=(
+            "A concise response in the user's language for a safety hold, clarification, or out-of-scope request. "
+            "Do not claim that a tool ran."
+        ),
+    )
+
+
+class ExerciseAgentResponse(BaseModel):
+    """User-facing response grounded in the actual Phyxio tool result."""
+
+    response: str = Field(
+        description="A concise, truthful response in the user's language based on the supplied tool result.",
+    )
 
 
 def _to_text(value: Any) -> str:
@@ -47,7 +97,7 @@ def _normalize_routine_payload(data: Any) -> dict[str, Any]:
 
 def _routine_candidates(routine_id: str | None = None) -> list[str]:
     candidates: list[str] = []
-    for value in (routine_id, ROUTINE_ID, FALLBACK_ROUTINE_ID):
+    for value in (routine_id, ROUTINE_ID):
         text = str(value or "").strip()
         if text and text not in candidates:
             candidates.append(text)
@@ -109,14 +159,6 @@ def _get_routine_list() -> dict[str, Any]:
     return _normalize_routine_payload(data)
 
 
-def _get_session_history(page: int = 1) -> dict[str, Any]:
-    service = get_phyxio_service()
-    get_sessions = getattr(service, "get_sessions", None)
-    if not callable(get_sessions):
-        raise RuntimeError("Phyxio session history is not available in this connector version.")
-    return _normalize_routine_payload(get_sessions(page=page))
-
-
 def _format_goal(value: Any, unit: str) -> str:
     text = str(value or "").strip()
     if not text or text in {"0", "None", "null"}:
@@ -134,15 +176,15 @@ def _brief_description(value: Any, max_chars: int = 120) -> str:
     return first_sentence[: max_chars - 1].rstrip() + "."
 
 
-def _parse_page(value: Any) -> int:
-    text = str(value or "").strip()
+def _parse_page(value: Any, first_page: int) -> int:
+    text = str(value).strip() if value is not None else ""
     if not text:
-        return 1
+        return first_page
     try:
         page = int(text)
     except ValueError:
-        return 1
-    return max(page, 1)
+        return first_page
+    return max(page, first_page)
 
 
 def _get_routine(data: dict[str, Any], routine_id: str | None = None) -> tuple[str, dict[str, Any]]:
@@ -152,48 +194,6 @@ def _get_routine(data: dict[str, Any], routine_id: str | None = None) -> tuple[s
     if not isinstance(routine, dict):
         raise RuntimeError(f"Routine {resolved_routine_id} is not available.")
     return resolved_routine_id, routine
-
-
-def _format_routine_exercises(data: dict[str, Any], routine_id: str | None = None) -> str:
-    error = data.get("error")
-    if error:
-        return f"I couldn't fetch your exercise list: {error}"
-
-    exercises = data.get("exercises") or {}
-    try:
-        resolved_routine_id, routine = _get_routine(data, routine_id)
-    except Exception as exc:
-        return f"I couldn't fetch your exercise list: {exc}"
-
-    routine_name = str(routine.get("name") or f"Routine {resolved_routine_id}").strip()
-    routine_exercises = routine.get("exercises") or []
-    if not routine_exercises:
-        return f"{routine_name} does not currently list any exercises."
-
-    lines = [f"Your current routine is {routine_name}. Exercises:"]
-    for index, item in enumerate(routine_exercises, start=1):
-        exercise_id = str(item.get("id") or "").strip()
-        exercise = exercises.get(exercise_id) or exercises.get(item.get("id")) or {}
-        name = str(exercise.get("name") or f"Exercise {exercise_id or index}").strip()
-        description = str(exercise.get("description") or "").strip()
-        goals = [
-            goal
-            for goal in (
-                _format_goal(item.get("iterations"), "repetitions"),
-                _format_goal(item.get("runtime"), "seconds max"),
-            )
-            if goal
-        ]
-        calibration = "calibration needed" if exercise.get("needs_calibration") else ""
-        details = ", ".join(part for part in [*goals, calibration] if part)
-        line = f"{index}. {name}"
-        if details:
-            line += f" ({details})"
-        if description:
-            line += f": {description}"
-        lines.append(line)
-
-    return "\n".join(lines)
 
 
 def _format_spoken_routine_summary(data: dict[str, Any], routine_id: str | None = None) -> str:
@@ -289,7 +289,7 @@ def _format_exercise_history(
     exercise_names = _exercise_lookup(routine_data or {})
     page = session_data.get("page")
     prefix = "Recent exercise sessions"
-    if page:
+    if page is not None:
         prefix += f" (page {page})"
 
     lines = [f"{prefix}:"]
@@ -302,17 +302,13 @@ def _format_exercise_history(
         if not isinstance(results, list):
             results = []
 
-        completed = sum(
-            1
-            for result in results
-            if isinstance(result, dict) and str(result.get("status") or "").lower() == "completed"
-        )
-        total = len(results)
+        statuses = Counter(str(result.get("status") or "unknown")
+                           for result in results if isinstance(result, dict))
         header = f"- {date}"
         if routine_id:
             header += f", routine {routine_id}"
-        if total:
-            header += f": {completed}/{total} completed"
+        if statuses:
+            header += ": " + ", ".join(f"{count} {status}" for status, count in statuses.items())
         lines.append(header)
 
         for result in results[:4]:
@@ -338,108 +334,6 @@ def _format_exercise_history(
         lines.append(f"I found {len(sessions)} sessions on this page; showing the latest {max_sessions}.")
 
     return "\n".join(lines)
-
-
-def _select_mirror_action(user_text: str) -> str | None:
-    text = user_text.lower()
-
-    start_requested = any(
-        phrase in text
-        for phrase in (
-            "start",
-            "begin",
-            "let's go",
-            "lets go",
-            "run it",
-            "run routine",
-            "start workout",
-            "start my workout",
-        )
-    )
-    if start_requested and any(
-        phrase in text
-        for phrase in (
-            "chest pain",
-            "faint",
-            "fainting",
-            "severe breathless",
-            "severe dizziness",
-            "dizzy",
-            "bleeding",
-        )
-    ):
-        return "safety_stop"
-
-    if any(phrase in text for phrase in ("calibrate", "setup", "set up", "align", "alignment", "check form")):
-        return "calibrate"
-    if start_requested:
-        return "start"
-    if any(
-        phrase in text
-        for phrase in (
-            "history",
-            "progress",
-            "session",
-            "sessions",
-            "last time",
-            "previous exercise",
-            "previous workout",
-            "past exercise",
-            "past workout",
-            "how did i do",
-        )
-    ):
-        return "history"
-    if any(
-        phrase in text
-        for phrase in (
-            "list",
-            "how many exercises",
-            "what exercises",
-            "which exercises",
-            "current exercises",
-            "exercise list",
-            "what is in my routine",
-            "what's in my routine",
-            "tell me my exercises",
-        )
-    ):
-        return "list"
-    if any(
-        phrase in text
-        for phrase in (
-            "show",
-            "open",
-            "view",
-            "see",
-            "what exercises",
-            "which exercises",
-            "my exercises",
-            "exercise routine",
-            "routine",
-        )
-    ):
-        return "show"
-    return None
-
-
-def _action_response(action: str, service_result: str) -> str:
-    if service_result.startswith("Phyxio service unavailable:") or " failed: " in service_result:
-        return service_result
-    if action == "show":
-        return "I'm showing your routine on the mirror now.\n\nStep into view of the camera."
-    if action == "calibrate":
-        return "I'm calibrating your exercises on the mirror now.\n\nStep into view of the camera."
-    if action == "start":
-        return (
-            "I'm starting your exercise routine now.\n\n"
-            "Move at a comfortable pace, and stop if you feel pain or dizziness."
-        )
-    if action == "list":
-        return service_result
-    if action == "history":
-        return service_result
-    return service_result
 
 
 @tool("show_exercises")
@@ -475,16 +369,16 @@ def list_exercises(routine_id: str = "") -> str:
 
 
 @tool("get_exercise_history")
-def get_exercise_history(page: str = "1") -> str:
+def get_exercise_history(config: RunnableConfig, page: str = "") -> str:
     """Summarize recent Phyxio exercise session history."""
 
     try:
-        routine_data = None
-        try:
-            routine_data = _get_routine_list()
-        except Exception:
-            routine_data = None
-        return _format_exercise_history(_get_session_history(_parse_page(page)), routine_data)
+        service = load_session_service()
+        if not isinstance(service.provider, PhyxioSessionProvider):
+            return service.config.fallback_text
+        user_id = str(config.get("configurable", {}).get("user_id") or "")
+        data, catalog = service.provider.fetch_page(user_id, _parse_page(page, service.config.first_page))
+        return _format_exercise_history(data, catalog)
     except Exception as exc:
         return f"I couldn't fetch your exercise history: {exc}"
 
@@ -494,13 +388,14 @@ _TOOL_REGISTRY: Mapping[str, BaseTool] = {
     "start_exercises": start_exercises,
     "list_exercises": list_exercises,
     "get_exercise_history": get_exercise_history,
+    "get_latest_exercise_session": get_latest_exercise_session,
 }
 
 
-def _require_prompt(spec: Dict[str, Any]) -> str:
-    prompt = spec.get("prompt")
+def _require_prompt(spec: Dict[str, Any], field_name: str) -> str:
+    prompt = spec.get(field_name)
     if not isinstance(prompt, str) or not prompt.strip():
-        raise ValueError(f"`prompt` missing or empty for agent '{AGENT_ID}'.")
+        raise ValueError(f"`{field_name}` missing or empty for agent '{AGENT_ID}'.")
     return prompt.strip()
 
 
@@ -532,12 +427,8 @@ def _resolve_tools(tool_ids: Sequence[str]) -> Sequence[BaseTool]:
     return resolved
 
 
-def _invoke_registered_tool(tool_name: str) -> str:
-    tool_obj = _TOOL_REGISTRY[tool_name]
-    func = getattr(tool_obj, "func", None)
-    if callable(func):
-        return _to_text(func(""))
-    return _to_text(tool_obj.invoke({}))
+def _invoke_registered_tool(tool_name: str, config=None) -> Any:
+    return _TOOL_REGISTRY[tool_name].invoke({}, config=config)
 
 
 def _extract_latest_user_text(messages: Any) -> str:
@@ -558,31 +449,102 @@ def _extract_latest_user_text(messages: Any) -> str:
 
 
 class _PhyxioExerciseNode:
-    def __init__(self, runner):
+    def __init__(
+        self,
+        *,
+        decision_model: Any,
+        response_model: Any,
+        decision_prompt: str,
+        response_prompt: str,
+        tools: Sequence[BaseTool],
+    ):
         self.name = AGENT_ID
-        self._runner = runner
+        self._decision_model = decision_model
+        self._response_model = response_model
+        self._decision_prompt = decision_prompt
+        self._response_prompt = response_prompt
+        self._tool_catalog = "\n".join(
+            f"- {tool_obj.name}: {tool_obj.description or 'No description supplied.'}"
+            for tool_obj in tools
+        )
+
+    @staticmethod
+    def _normalise_decision(decision: ExerciseActionDecision) -> ExerciseActionDecision:
+        """Enforce schema consistency without interpreting the user's language."""
+
+        if decision.safety_hold:
+            return decision.model_copy(
+                update={"action": "none", "needs_clarification": False}
+            )
+        if decision.needs_clarification:
+            return decision.model_copy(update={"action": "none"})
+        return decision
+
+    @staticmethod
+    def _forward_config(config: Any) -> dict[str, Any] | None:
+        if not isinstance(config, dict):
+            return None
+
+        invoke_config: dict[str, Any] = {}
+        configurable = config.get("configurable")
+        if isinstance(configurable, dict):
+            forwarded = {
+                key: configurable[key]
+                for key in ("thread_id", "user_id", "preferences")
+                if configurable.get(key) is not None
+            }
+            if forwarded:
+                invoke_config["configurable"] = forwarded
+        if "recursion_limit" in config:
+            invoke_config["recursion_limit"] = config["recursion_limit"]
+        return invoke_config or None
+
+    @staticmethod
+    def _result_message(text: str, tool_call_id: str | None, extra=None) -> dict[str, list[Any]]:
+        if tool_call_id:
+            return {
+                "messages": [
+                    ToolMessage(
+                        content=text,
+                        tool_call_id=tool_call_id,
+                        name="RouteState",
+                        additional_kwargs={"source": AGENT_ID, **(extra or {})},
+                    )
+                ]
+            }
+        return {
+            "messages": [
+                AIMessage(content=text, additional_kwargs={"source": AGENT_ID, **(extra or {})})
+            ]
+        }
 
     @staticmethod
     def _extract_tool_call_id(messages: Any) -> str | None:
+        """Match only a pending call in this turn, never historical routing calls."""
         if not isinstance(messages, list) or not messages:
             return None
+        answered: set[str] = set()
         for msg in reversed(messages):
             if isinstance(msg, dict):
+                role = msg.get("role") or msg.get("type")
+                response_id = msg.get("tool_call_id")
                 tool_calls = msg.get("tool_calls") or []
-                if tool_calls:
-                    first = tool_calls[0]
-                    if isinstance(first, dict):
-                        call_id = first.get("id")
-                        return str(call_id) if call_id else None
+            else:
+                role = getattr(msg, "type", None)
+                response_id = getattr(msg, "tool_call_id", None)
+                tool_calls = getattr(msg, "tool_calls", None) or []
+            if role in {"human", "user"}:
+                return None
+            if role == "tool":
+                if response_id:
+                    answered.add(str(response_id))
                 continue
-            tool_calls = getattr(msg, "tool_calls", None) or []
-            if tool_calls:
-                first = tool_calls[0]
-                if isinstance(first, dict):
-                    call_id = first.get("id")
-                    return str(call_id) if call_id else None
-                call_id = getattr(first, "id", None)
-                return str(call_id) if call_id else None
+            if role in {"ai", "assistant"}:
+                for tool_call in tool_calls:
+                    call_id = tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", None)
+                    if call_id and str(call_id) not in answered:
+                        return str(call_id)
+                return None
         return None
 
     def __call__(self, state: Dict[str, Any], config=None, store: Any = None):
@@ -590,128 +552,95 @@ class _PhyxioExerciseNode:
 
         messages = state.get("messages", [])
         user_text = _extract_latest_user_text(messages)
+        ontology_context = str(state.get("ontology_context") or "").strip()
         tool_call_id = self._extract_tool_call_id(messages)
         if not user_text:
-            user_text = "Help with the user's latest exercise request."
+            return self._result_message("Exercise request is empty.", tool_call_id)
 
-        selected_action = _select_mirror_action(user_text)
-        if selected_action == "safety_stop":
-            answer = (
-                "Let's not start exercises right now. Stop and seek urgent medical help "
-                "if you have chest pain, fainting, severe breathlessness, or severe dizziness."
-            )
-            if tool_call_id:
-                return {
-                    "messages": [
-                        ToolMessage(
-                            content=answer,
-                            tool_call_id=tool_call_id,
-                            name="RouteState",
-                            additional_kwargs={"source": AGENT_ID},
-                        )
-                    ]
-                }
-            return {"messages": [AIMessage(content=answer)]}
-
-        if selected_action in {"show", "calibrate", "start", "list", "history"}:
-            tool_name = {
-                "show": "show_exercises",
-                "calibrate": "calibrate_exercises",
-                "start": "start_exercises",
-                "list": "list_exercises",
-                "history": "get_exercise_history",
-            }[selected_action]
-            answer = _action_response(selected_action, _invoke_registered_tool(tool_name))
-            if tool_call_id:
-                return {
-                    "messages": [
-                        ToolMessage(
-                            content=answer,
-                            tool_call_id=tool_call_id,
-                            name="RouteState",
-                            additional_kwargs={"source": AGENT_ID},
-                        )
-                    ]
-                }
-            return {"messages": [AIMessage(content=answer)]}
-
-        invoke_config: Dict[str, Any] = {}
-        if isinstance(config, dict):
-            configurable = config.get("configurable")
-            if isinstance(configurable, dict):
-                thread_id = configurable.get("thread_id")
-                user_id = configurable.get("user_id")
-                forwarded = {}
-                if thread_id is not None:
-                    forwarded["thread_id"] = thread_id
-                if user_id is not None:
-                    forwarded["user_id"] = user_id
-                if forwarded:
-                    invoke_config["configurable"] = forwarded
-            if "recursion_limit" in config:
-                invoke_config["recursion_limit"] = config["recursion_limit"]
+        invoke_config = self._forward_config(config)
+        response_style = preferences_from_config(config).response_style()
 
         try:
-            result = self._runner.invoke(
-                {"messages": [HumanMessage(content=user_text)]},
-                config=invoke_config or None,
+            decision = self._decision_model.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            f"{self._decision_prompt}\n\n"
+                            f"{ontology_context}\n\n"
+                            f"AVAILABLE PHYXIO TOOLS\n{self._tool_catalog}"
+                            f"{response_style}"
+                        ).strip()
+                    ),
+                    *(recent_dialogue(messages) or [HumanMessage(content=user_text)]),
+                ],
+                config=invoke_config,
             )
         except Exception as exc:
-            error_text = f"Exercise agent failed: {exc}"
-            if tool_call_id:
-                return {
-                    "messages": [
-                        ToolMessage(content=error_text, tool_call_id=tool_call_id, name="RouteState")
-                    ]
-                }
-            return {"messages": [AIMessage(content=error_text)]}
+            return self._result_message(f"Exercise decision failed: {exc}", tool_call_id)
 
-        answer = ""
-        if isinstance(result, dict):
-            messages = result.get("messages") or []
-            if messages:
-                last = messages[-1]
-                if isinstance(last, dict):
-                    answer = _to_text(last.get("content", ""))
-                else:
-                    answer = _to_text(getattr(last, "content", ""))
-        if not answer:
-            answer = _to_text(getattr(result, "content", "")) or "Exercise request completed."
+        if not isinstance(decision, ExerciseActionDecision):
+            return self._result_message(
+                "Exercise decision failed validation.",
+                tool_call_id,
+            )
 
-        if tool_call_id:
-            return {
-                "messages": [
-                    ToolMessage(
-                        content=answer,
-                        tool_call_id=tool_call_id,
-                        name="RouteState",
-                        additional_kwargs={"source": AGENT_ID},
-                    )
-                ]
-            }
-        return {"messages": [AIMessage(content=answer)]}
+        decision = self._normalise_decision(decision)
+        if decision.action == "none":
+            answer = decision.user_response.strip() or decision.reason.strip()
+            return self._result_message(
+                answer or "The exercise request needs more information.",
+                tool_call_id,
+            )
+
+        if decision.action in {"get_latest_exercise_session", "get_exercise_history"} and decision.session_subject != "current_user":
+            return self._result_message(load_session_service().config.subject_clarification, tool_call_id)
+
+        service_result = _invoke_registered_tool(decision.action, config=invoke_config)
+        extra = {"executed_tool": decision.action}
+        fallback = _to_text(service_result)
+        if isinstance(service_result, dict):
+            extra["exercise_session"] = service_result
+            fallback = service_result["fallback_text"]
+        try:
+            response = self._response_model.invoke(
+                [
+                    SystemMessage(content=self._response_prompt + response_style),
+                    HumanMessage(
+                        content=json.dumps(
+                            {
+                                "user_request": user_text,
+                                "decision": decision.model_dump(),
+                                "executed_tool": decision.action,
+                                "tool_result": service_result,
+                            },
+                            ensure_ascii=False,
+                        )
+                    ),
+                ],
+                config=invoke_config,
+            )
+        except Exception:
+            return self._result_message(fallback, tool_call_id, extra)
+
+        if not isinstance(response, ExerciseAgentResponse):
+            return self._result_message(fallback, tool_call_id, extra)
+        answer = response.response.strip() or fallback
+        return self._result_message(answer, tool_call_id, extra)
 
 
 def build(spec: Dict[str, Any] | None = None):
     spec = spec or {}
 
-    prompt = _require_prompt(spec)
-    model_name = str(spec.get("model") or DEFAULT_MODEL)
+    decision_prompt = _require_prompt(spec, "prompt")
+    response_prompt = _require_prompt(spec, "response_prompt")
     tool_ids = _include_default_tools(_normalize_tools(spec.get("tools") or DEFAULT_TOOLS))
     tools = _resolve_tools(tool_ids)
 
-    # llm = AzureChatOpenAI(
-    #     azure_deployment=model_name,
-    #     temperature=0,
-    #     api_version="2024-12-01-preview",
-    #     azure_endpoint="https://mayaagent.openai.azure.com/",
-    # )
-    llm = AzureChatOpenAI(azure_deployment="gpt-4.1-mini", temperature=0, api_version="2025-04-01-preview", azure_endpoint="https://socet-air-6721-resource.services.ai.azure.com/")
-
-    runner = create_agent(
-        model=llm,
+    llm = get_chat_model()
+    return _PhyxioExerciseNode(
+        decision_model=llm.with_structured_output(ExerciseActionDecision, strict=True),
+        response_model=llm.with_structured_output(ExerciseAgentResponse, strict=True),
+        decision_prompt=decision_prompt,
+        response_prompt=response_prompt,
         tools=tools,
-        system_prompt=prompt,
-        name=AGENT_ID,
     )
-    return _PhyxioExerciseNode(runner)

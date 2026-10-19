@@ -1,0 +1,87 @@
+{
+  "model_id": "exercise",
+  "title": "Exercise & Physical Activity",
+  "version": "0.1.0-draft",
+  "status": "draft_screenshot_translation",
+  "source": {
+    "type": "screenshot",
+    "path": "maya/models_screenshots/exercise.png",
+    "extracted_at": "2026-07-08"
+  },
+  "model_kinds": ["data_schema", "procedure_candidate", "guidance_policy"],
+  "nodes": [
+    {"id": "exercise_intervention", "label": "ExerciseIntervention", "kind": "entity"},
+    {"id": "exercise_plan", "label": "ExercisePlan", "kind": "entity"},
+    {"id": "planned_exercise_session", "label": "PlannedExerciseSession", "kind": "entity"},
+    {"id": "schedule", "label": "Schedule", "kind": "entity"},
+    {"id": "intensity", "label": "Intensity", "kind": "entity"},
+    {"id": "duration", "label": "Duration", "kind": "entity"},
+    {"id": "exercise_modality", "label": "ExerciseModality", "kind": "entity"},
+    {"id": "supervised_exercise_therapy", "label": "SupervisedExerciseTherapy", "kind": "entity"},
+    {"id": "high_intensity_interval_training", "label": "HighIntensityIntervalTraining", "kind": "entity"},
+    {"id": "aerobic_exercise", "label": "AerobicExercise", "kind": "entity"},
+    {"id": "resistance_training", "label": "ResistanceTraining", "kind": "entity"},
+    {"id": "exercise_adherence_assessment", "label": "ExerciseAdherenceAssessment", "kind": "entity"},
+    {"id": "exercise_adherence_result", "label": "ExerciseAdherenceResult", "kind": "entity"},
+    {"id": "performed_exercise_session", "label": "PerformedExerciseSession", "kind": "entity"},
+    {"id": "person", "label": "Person", "kind": "entity"},
+    {"id": "measurement_event", "label": "MeasurementEvent", "kind": "entity"},
+    {"id": "exercise_activity", "label": "ExerciseActivity", "kind": "entity"},
+    {"id": "exercise_activity_type", "label": "ExerciseActivityType", "kind": "entity"},
+    {"id": "device", "label": "Device", "kind": "entity"}
+  ],
+  "relations": [
+    {"id": "exercise_intervention_has_exercise_plan", "label": "hasExercisePlan", "from": "exercise_intervention", "to": "exercise_plan", "kind": "object_property", "confidence": "high"},
+    {"id": "exercise_plan_prescribes_planned_session", "label": "prescribes", "from": "exercise_plan", "to": "planned_exercise_session", "kind": "object_property", "confidence": "high"},
+    {"id": "exercise_plan_has_modality", "label": "hasModality", "from": "exercise_plan", "to": "exercise_modality", "kind": "object_property", "confidence": "high"},
+    {"id": "planned_session_has_schedule", "label": "hasSchedule", "from": "planned_exercise_session", "to": "schedule", "kind": "object_property", "confidence": "high"},
+    {"id": "planned_session_has_target_intensity", "label": "hasTargetIntensity", "from": "planned_exercise_session", "to": "intensity", "kind": "object_property", "confidence": "high"},
+    {"id": "planned_session_has_target_duration", "label": "hasTargetDuration", "from": "planned_exercise_session", "to": "duration", "kind": "object_property", "confidence": "high"},
+    {"id": "performed_session_realises_planned_session", "label": "realises", "from": "performed_exercise_session", "to": "planned_exercise_session", "kind": "object_property", "confidence": "medium"},
+    {"id": "performed_session_has_actual_duration", "label": "hasActualDuration", "from": "performed_exercise_session", "to": "duration", "kind": "object_property", "confidence": "high"},
+    {"id": "performed_session_has_actual_intensity", "label": "hasActualIntensity", "from": "performed_exercise_session", "to": "intensity", "kind": "object_property", "confidence": "high"},
+    {"id": "performed_session_has_modality", "label": "hasModality", "from": "performed_exercise_session", "to": "exercise_modality", "kind": "object_property", "confidence": "high"},
+    {"id": "performed_session_performed_by_person", "label": "performedBy", "from": "performed_exercise_session", "to": "person", "kind": "object_property", "confidence": "high"},
+    {"id": "measurement_event_occurs_during_session", "label": "occursDuring", "from": "measurement_event", "to": "performed_exercise_session", "kind": "object_property", "confidence": "high"},
+    {"id": "performed_session_includes_activity", "label": "includesActivity", "from": "performed_exercise_session", "to": "exercise_activity", "kind": "object_property", "confidence": "high"},
+    {"id": "performed_session_monitored_by_device", "label": "monitoredBy", "from": "performed_exercise_session", "to": "device", "kind": "object_property", "confidence": "high"},
+    {"id": "exercise_activity_has_activity_type", "label": "hasActivityType", "from": "exercise_activity", "to": "exercise_activity_type", "kind": "object_property", "confidence": "high"},
+    {"id": "exercise_activity_type_belongs_to_modality", "label": "belongsToModality", "from": "exercise_activity_type", "to": "exercise_modality", "kind": "object_property", "confidence": "high"},
+    {"id": "adherence_assessment_compares_against_planned_session", "label": "comparesAgainst", "from": "exercise_adherence_assessment", "to": "planned_exercise_session", "kind": "object_property", "confidence": "high"},
+    {"id": "adherence_assessment_based_on_performed_session", "label": "basedOn", "from": "exercise_adherence_assessment", "to": "performed_exercise_session", "kind": "object_property", "confidence": "high"},
+    {"id": "adherence_assessment_has_result", "label": "hasAdherenceResult", "from": "exercise_adherence_assessment", "to": "exercise_adherence_result", "kind": "object_property", "confidence": "high"}
+  ],
+  "taxonomy_groups": [
+    {"id": "exercise_modality_subclasses_or_instances", "parent": "exercise_modality", "members": ["supervised_exercise_therapy", "high_intensity_interval_training", "aerobic_exercise", "resistance_training"], "interpretation": "subclass_or_instance", "confidence": "high"}
+  ],
+  "agent_contracts": {
+    "supervisor": {"usage": "route exercise-plan and exercise-session requests", "inject": "summary only"},
+    "health_rag": {"usage": "exercise evidence context when answering health questions", "inject": "only when health question depends on exercise plan/session facts"},
+    "phyxio_exercise_agent": {"usage": "primary operational model", "inject": "planned session, performed session, target/actual intensity and duration, adherence result"}
+  },
+  "procedure_contracts": [
+    {
+      "id": "exercise_session_execution_sequence",
+      "strictness": "candidate_strict",
+      "applies_when": ["showing, starting, reviewing, or assessing an exercise session"],
+      "required_steps": [
+        "identify exercise intervention and exercise plan",
+        "load planned exercise session and target duration/intensity",
+        "execute or inspect performed exercise session",
+        "record actual duration/intensity and activities",
+        "compare performed session against planned session for adherence assessment"
+      ]
+    }
+  ],
+  "memory_bindings": [
+    {"path": "exercise.plans", "node": "exercise_plan", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "exercise.planned_sessions", "node": "planned_exercise_session", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "exercise.performed_sessions", "node": "performed_exercise_session", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"},
+    {"path": "exercise.adherence_assessments", "node": "exercise_adherence_assessment", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"}
+  ],
+  "aliases": [],
+  "review_notes": [
+    "The direction of realises is visually interpreted as PerformedExerciseSession realises PlannedExerciseSession; confirm with ontology author.",
+    "The modality list is explicitly labelled subclasses OR instances, so later runtime code should not assume class-only taxonomy."
+  ]
+}

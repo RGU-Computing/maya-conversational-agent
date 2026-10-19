@@ -1,0 +1,101 @@
+{
+  "model_id": "cancer_history",
+  "title": "Cancer History & Treatment Exposure",
+  "version": "0.1.0-draft",
+  "status": "draft_screenshot_translation",
+  "source": {
+    "type": "screenshot",
+    "path": "maya/models_screenshots/cancer_history.png",
+    "extracted_at": "2026-07-08"
+  },
+  "model_kinds": ["data_schema", "guidance_policy", "procedure_candidate"],
+  "nodes": [
+    {"id": "person", "label": "Person", "kind": "entity"},
+    {"id": "cancer_survivor_role", "label": "CancerSurvivorRole", "kind": "entity"},
+    {"id": "cancer_treatment_history", "label": "CancerTreatmentHistory", "kind": "entity"},
+    {"id": "cancer_treatment_record", "label": "CancerTreatmentRecord", "kind": "entity"},
+    {"id": "time_interval", "label": "TimeInterval", "kind": "entity"},
+    {"id": "cancer_treatment_type", "label": "CancerTreatmentType", "kind": "entity"},
+    {"id": "treatment_exposure", "label": "TreatmentExposure", "kind": "entity"},
+    {"id": "cardiotoxicity_risk", "label": "CardiotoxicityRisk", "kind": "entity"},
+    {"id": "cardiotoxic_treatment_exposure", "label": "CardiotoxicTreatmentExposure", "kind": "entity"},
+    {"id": "systemic_therapy_exposure", "label": "SystemicTherapyExposure", "kind": "entity"},
+    {"id": "chemotherapy_exposure", "label": "ChemotherapyExposure", "kind": "entity"},
+    {"id": "anthracycline_exposure", "label": "AnthracyclineExposure", "kind": "entity"},
+    {"id": "targeted_therapy_exposure", "label": "TargetedTherapyExposure", "kind": "entity"},
+    {"id": "immunotherapy_exposure", "label": "ImmunotherapyExposure", "kind": "entity"},
+    {"id": "radiotherapy_exposure", "label": "RadiotherapyExposure", "kind": "entity"},
+    {"id": "chest_radiotherapy_exposure", "label": "ChestRadiotherapyExposure", "kind": "entity"}
+  ],
+  "relations": [
+    {"id": "person_has_role", "label": "hasRole", "from": "person", "to": "cancer_survivor_role", "kind": "object_property", "confidence": "high"},
+    {"id": "person_has_cancer_treatment_history", "label": "hasCancerTreatmentHistory", "from": "person", "to": "cancer_treatment_history", "kind": "object_property", "confidence": "high"},
+    {"id": "cancer_treatment_history_includes_record", "label": "includes", "from": "cancer_treatment_history", "to": "cancer_treatment_record", "kind": "object_property", "confidence": "high"},
+    {"id": "cancer_treatment_record_has_treatment_period", "label": "hasTreatmentPeriod", "from": "cancer_treatment_record", "to": "time_interval", "kind": "object_property", "confidence": "high"},
+    {"id": "cancer_treatment_record_records_treatment_type", "label": "recordsTreatmentType", "from": "cancer_treatment_record", "to": "cancer_treatment_type", "kind": "object_property", "confidence": "high"},
+    {"id": "cancer_treatment_record_indicates_exposure", "label": "indicatesExposure", "from": "cancer_treatment_record", "to": "treatment_exposure", "kind": "object_property", "confidence": "high"},
+    {"id": "treatment_exposure_is_risk_factor_of_cardiotoxicity_risk", "label": "isRiskFactorOf", "from": "treatment_exposure", "to": "cardiotoxicity_risk", "kind": "object_property", "confidence": "high"}
+  ],
+  "taxonomy_groups": [
+    {"id": "treatment_exposure_subclasses", "parent": "treatment_exposure", "members": ["cardiotoxic_treatment_exposure"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "cardiotoxic_treatment_exposure_subclasses", "parent": "cardiotoxic_treatment_exposure", "members": ["systemic_therapy_exposure", "radiotherapy_exposure"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "systemic_therapy_exposure_subclasses", "parent": "systemic_therapy_exposure", "members": ["chemotherapy_exposure", "targeted_therapy_exposure", "immunotherapy_exposure"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "chemotherapy_exposure_subclasses", "parent": "chemotherapy_exposure", "members": ["anthracycline_exposure"], "interpretation": "subclass", "confidence": "high"},
+    {"id": "radiotherapy_exposure_subclasses", "parent": "radiotherapy_exposure", "members": ["chest_radiotherapy_exposure"], "interpretation": "subclass", "confidence": "medium"}
+  ],
+  "agent_contracts": {
+    "supervisor": {"usage": "identify cancer-history updates and route health questions", "inject": "summary only when relevant"},
+    "health_rag": {"usage": "survivorship and treatment-exposure context", "inject": "relevant exposure records with treatment period and source"},
+    "phyxio_exercise_agent": {"usage": "exercise safety context", "inject": "cardiotoxic exposure summary only when exercise risk may be affected"}
+  },
+  "procedure_contracts": [
+    {
+      "id": "cardiotoxic_exposure_requires_risk_awareness",
+      "strictness": "candidate_strict",
+      "applies_when": ["answering personal cardiovascular, exercise, or surveillance questions", "cardiotoxic treatment exposure is present"],
+      "required_steps": [
+        "check treatment exposure records before personalized risk discussion",
+        "do not infer exposure type from cancer diagnosis alone",
+        "separate treatment type, treatment period, and derived exposure"
+      ]
+    }
+  ],
+  "memory_bindings": [
+    {
+      "path": "cancer_history.treatment_records",
+      "node": "cancer_treatment_record",
+      "cardinality": "many",
+      "temporal": true,
+      "provenance_required": true,
+      "status": "active",
+      "capture": {
+        "properties_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["treatment_name"],
+          "properties": {
+            "treatment_name": {"type": "string", "minLength": 1, "description": "Treatment explicitly identified in the source assertion."},
+            "treatment_type": {"type": "string", "minLength": 1, "description": "Capture only a treatment type explicitly stated in the source assertion."},
+            "treatment_period": {"type": "string", "minLength": 1, "description": "Capture only a treatment period explicitly stated in the source assertion."},
+            "status": {"type": "string", "minLength": 1, "description": "Capture only treatment status explicitly stated in the source assertion; do not infer current or completed status."}
+          }
+        },
+        "relation_mappings": {
+          "treatment_name": "cancer_treatment_record_records_treatment_type",
+          "treatment_type": "cancer_treatment_record_records_treatment_type",
+          "treatment_period": "cancer_treatment_record_has_treatment_period"
+        },
+        "extension_fields": ["status"],
+        "identity_fields": ["treatment_name", "treatment_period"],
+        "update_mode": "supersede"
+      }
+    },
+    {"path": "cancer_history.treatment_exposures", "node": "treatment_exposure", "cardinality": "many", "temporal": true, "provenance_required": true, "status": "draft"}
+  ],
+  "aliases": [],
+  "review_notes": [
+    "ChestRadiotherapyExposure is partly near the image edge but the label is readable.",
+    "Dose/intensity/cumulative exposure fields are not visible and should be added only if future ontology versions include them."
+  ]
+}

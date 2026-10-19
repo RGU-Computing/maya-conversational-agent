@@ -51,13 +51,13 @@ def _connection_string() -> str:
     return conn or ""
 
 
-def _pool_config() -> Dict[str, int] | None:
+def _pool_config() -> Dict[str, int]:
     cfg: Dict[str, int] = {}
     if os.getenv(_ENV_POOL_MIN):
         cfg["min_size"] = int(os.getenv(_ENV_POOL_MIN))
     if os.getenv(_ENV_POOL_MAX):
         cfg["max_size"] = int(os.getenv(_ENV_POOL_MAX))
-    return cfg or None
+    return cfg
 
 
 def get_postgres_memory() -> Tuple[BaseStore, BaseCheckpointSaver]:
@@ -75,10 +75,10 @@ def get_postgres_memory() -> Tuple[BaseStore, BaseCheckpointSaver]:
                 "fields": ["question"],
             }
 
-            store_cm = (
-                PostgresStore.from_conn_string(conn, pool_config=pool, index=index_config)
-                if pool
-                else PostgresStore.from_conn_string(conn, index=index_config)
+            store_cm = PostgresStore.from_conn_string(
+                conn,
+                pool_config=pool,
+                index=index_config,
             )
 
             _STORE = _STACK.enter_context(store_cm)
