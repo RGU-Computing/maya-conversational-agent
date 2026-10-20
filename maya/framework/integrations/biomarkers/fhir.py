@@ -1,4 +1,4 @@
-"""Read-only adapter for UCLM's libfhir 26.10.16 proxy contract."""
+"""Read-only adapter using the documented libfhir client.get()/record.dump() API."""
 
 from __future__ import annotations
 
@@ -6,8 +6,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from libfhir import FHIRProxyClient, ResourceCreator
-from requests import HTTPError
+from libfhir.client import FHIRProxyClient
 
 from . import FHIRConfig, Observation
 
@@ -17,45 +16,36 @@ class FHIRObservationProvider:
 
     def __init__(self, config: FHIRConfig, config_dir: Path, accepted_statuses: list[str]):
         self.config, self.accepted_statuses = config, accepted_statuses
-        unsupported = set(config.resource_types.values()) - ResourceCreator.supported_observations.keys()
-        if unsupported:
-            raise ValueError(f"Unsupported libfhir observation types: {sorted(unsupported)}")
-        credentials = json.loads((config_dir / Path(config.client_config_path).expanduser()).read_text())
+        credential_path = config_dir / Path(config.client_config_path).expanduser()
+        credentials = json.loads(credential_path.read_text())
         url = urlsplit(credentials["url"])
         if (url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment
-                or credentials.get("is_secure", True) is not True or not credentials.get("token")):
-            raise ValueError("FHIR credentials require an HTTPS URL, a token and certificate verification.")
+                or credentials.get("is_secure", True) is not True):
+            raise ValueError("FHIR credentials require an HTTPS URL and certificate verification.")
+        if credentials.get("token_file"):
+            token_path = credential_path.parent / Path(credentials["token_file"]).expanduser()
+            if not token_path.is_file():
+                raise ValueError("FHIR token_file must point to an existing private file.")
+            credentials["token_file"] = str(token_path)
+            credentials.setdefault("token", None)
+        elif not credentials.get("token"):
+            raise ValueError("FHIR credentials require token or token_file.")
+        credentials["url"] = credentials["url"].rstrip("/")
         self.client = FHIRProxyClient(**credentials)
 
-    def _get(self, resource_type: str, **params) -> list[dict]:
-        # libfhir.get() discards scalar units and cannot parse timezone offsets.
-        # Use its authenticated transport, retaining the original FHIR resources.
-        with self.client._session.get(
-            self.client._base_url.rstrip("/") + "/record/get",
-            json={"token": self.client._token, "resource_type": resource_type, "value": params},
-            verify=True, timeout=self.config.timeout_seconds, allow_redirects=False,
-            headers={"Content-Type": "application/json"},
-        ) as response:
-            if response.status_code != 200:
-                raise HTTPError("FHIR observation service is unavailable.", response=response)
-            payload = response.json()
-        if not isinstance(payload, dict) or payload.get("status") != "ok" or not isinstance(payload.get("items"), list):
-            raise ValueError("Invalid FHIR observation response.")
-        return payload["items"]
-
     def _normalize(self, item: dict, patient_id: str, measurement_id: str) -> Observation:
-        resource_type = self.config.resource_types[measurement_id]
-        expected = ResourceCreator.supported_observations[resource_type]["code"]["coding"]
-        if (item["resourceType"] != "Observation" or item["subject"]["reference"] != f"Patient/{patient_id}"
-                or not any(code.get("system") == known["system"] and code.get("code") == known["code"]
-                           for code in item["code"]["coding"] for known in expected)):
-            raise ValueError("FHIR observation does not match the requested patient or measurement.")
+        if item["resourceType"] != "Observation" or item["subject"]["reference"] != f"Patient/{patient_id}":
+            raise ValueError("FHIR observation does not match the session patient.")
+        quantities = [item.get("valueQuantity", {}), *(
+            component.get("valueQuantity", {}) for component in item.get("component", []))]
+        if any("value" in quantity and not (quantity.get("unit") or quantity.get("code")) for quantity in quantities):
+            raise ValueError("FHIR quantity has no verifiable unit.")
         # Keep the period as context; use its end (or start for an open period) for ordering.
         period = item.get("effectivePeriod", {})
         measured_at = item.get("effectiveDateTime") or period.get("end") or period.get("start")
-        context_fields = {"code", "component", "effectivePeriod", "dataAbsentReason", "interpretation",
-                          "method", "bodySite", "specimen", "device", "note"}
-        result = {key: value for key, value in item.items() if key.startswith("value") or key in context_fields}
+        # Keep all SDK-serialized fields except identity/metadata represented separately.
+        result = {key: value for key, value in item.items()
+                  if key not in {"resourceType", "id", "subject", "status", "referenceRange"}}
         if not any(key.startswith("value") or key in {"component", "dataAbsentReason"} for key in result):
             raise ValueError("FHIR observation has neither a result nor an absence reason.")
         return Observation(id=item["id"], patient_id=patient_id, measurement_id=measurement_id,
@@ -65,14 +55,24 @@ class FHIRObservationProvider:
 
     def fetch_latest(self, patient_id: str, measurement_ids: list[str]) -> list[Observation]:
         latest = []
+        unresolved = False
         try:
             for measurement_id in measurement_ids:
-                items = self._get(self.config.resource_types[measurement_id], subject=patient_id)
-                records = [self._normalize(item, patient_id, measurement_id)
-                           for item in items if item["status"] in self.accepted_statuses]
+                items = self.client.get(self.config.resource_types[measurement_id], subject=patient_id)
+                # 26.10.16 returns [] for both empty searches and some transport/parser
+                # failures. Do not claim a successful empty search from that result.
+                if items is None:
+                    raise ValueError("libfhir could not retrieve observations.")
+                if not items:
+                    unresolved = True
+                    continue
+                records = [self._normalize(item.dump(), patient_id, measurement_id) for item in items]
+                records = [record for record in records if record.status in self.accepted_statuses]
                 if records:
                     measured_at = max(record.measured_at for record in records)
                     latest.extend(record for record in records if record.measured_at == measured_at)
-        except (KeyError, TypeError, AttributeError):
-            raise ValueError("Malformed FHIR observation response.") from None
+        except (KeyError, TypeError, AttributeError, AssertionError):
+            raise ValueError("Invalid libfhir observation result.") from None
+        if not latest and unresolved:
+            raise ValueError("libfhir returned no verifiable observations; the lookup outcome is ambiguous.")
         return latest

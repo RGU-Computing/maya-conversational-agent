@@ -12,7 +12,6 @@
       "blood_pressure": "blood-pressure",
       "heart_rate": "heart-rate",
       "body_weight": "body-weight"
-    },
-    "timeout_seconds": 10
+    }
   }
 }

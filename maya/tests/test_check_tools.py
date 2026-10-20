@@ -114,14 +114,13 @@ class ToolCheckTests(unittest.TestCase):
         self.assertEqual(report["checks"]["biomarkers"]["status"], "configured")
 
     @unittest.skipUnless(importlib.util.find_spec("libfhir"), "Requires UCLM libfhir.")
-    def test_fhir_mapping_real_read_and_http_error_are_distinct(self):
+    def test_fhir_mapping_public_sdk_read_and_failure_are_distinct(self):
         from maya.tests.test_fhir_biomarkers import configured_service as fhir_service, observation, response
 
         service = fhir_service(self.folder)
-        self.addCleanup(service.provider.client._session.close)
         self.enterContext(patch.dict(os.environ, {"MAYA_BIOMARKER_CONFIG": str(self.folder / "biomarkers.json")}))
         self.enterContext(patch("maya.framework.integrations.biomarkers.load_biomarker_service", return_value=service))
-        with patch.object(service.provider.client._session, "get", return_value=response([observation()])) as get:
+        with patch("requests.Session.get", return_value=response([observation()])) as get:
             code, report = self.run_check("--only", "biomarkers")
             self.assertEqual(report["checks"]["biomarkers"]["status"], "configured")
             get.assert_not_called()
@@ -134,7 +133,8 @@ class ToolCheckTests(unittest.TestCase):
             get.return_value = response(status=403)
             code, report = self.run_check("--only", "biomarkers", "--fetch")
             self.assertEqual(code, 1)
-            self.assertEqual(report["checks"]["biomarkers"]["http_status"], 403)
+            self.assertEqual(report["checks"]["biomarkers"]["error_type"], "ValueError")
+            self.assertNotIn("http_status", report["checks"]["biomarkers"])
             get.reset_mock()
             service.config.patient_map.clear()
             code, report = self.run_check("--only", "biomarkers", "--fetch")

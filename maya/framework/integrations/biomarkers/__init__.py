@@ -35,7 +35,6 @@ class FHIRConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     client_config_path: str
     resource_types: dict[str, str]
-    timeout_seconds: float = Field(gt=0)
 
 
 class BiomarkerConfig(BaseModel):

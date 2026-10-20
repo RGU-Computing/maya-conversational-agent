@@ -14,7 +14,12 @@ Package ownership and moved command/configuration paths are documented in
 | --- | --- | --- |
 | Participant identity | One validated startup `SessionConfig` supplies the supervisor, memory and tools. Each launch has a participant-scoped conversation thread. | UCLM supplies the authenticated participant ID and restarts MAYA when the login changes. |
 | Exercise history | Real `getSessionList(page)` adapter; page 0; latest record and comparisons; both history tools validate the runtime participant ID. | UCLM connector and ICE installed, exactly one authenticated Phyxio browser connected. |
-| Biomarkers | Real read-only libfhir adapter, preserving measurement units, dates and provenance; shared by supervisor and HealthRAG. | Oscar's credential JSON plus a confirmed mapping from MAYA user ID to FHIR Patient ID. |
+| Biomarkers | Read-only adapter using the documented libfhir `get()` and `dump()` methods; shared by supervisor and HealthRAG. | Oscar's credentials plus the participant's Phyxio username as FHIR Patient ID. See the SDK limitations below before deployment. |
+
+Oscar has confirmed that a FHIR Patient ID is the participant's **Phyxio username**.
+Automatic retrieval of that authenticated username from PhyxioConnect is awaiting
+UCLM's library update. A local MAYA identity can differ from the username; its private
+`patient_map` must explicitly associate them. Do not substitute an unverified candidate.
 
 The supplied Phyxio API returns the browser's current account history without a
 participant ID. It cannot independently verify that the browser login matches
@@ -32,6 +37,27 @@ retrieval and the TTS call using simulated transport/audio. A credentialed reque
 to UCLM's real device-list operation succeeded; patient observations remain
 untested until the confirmed Patient ID mapping is supplied. Ontology files were
 unchanged. These are development results; repeat the live checks on the mirror.
+
+Validation follow-up on 20 October 2026: the public-SDK correction passes 277
+offline tests and the 14 real-model exercise scenarios. The focused FHIR tests
+confirm that quantities without units are rejected and that HealthRAG can ask for
+the measurement, use the user's value and unit in retrieval, and answer without
+repeating the fetch. Synthetic FHIR responses, RAM memory and simulated audio are
+not live participant or mirror validation.
+The final full FHIR/supervisor/runner run passed 9 of 10 scenarios: one assessment
+returned the safe error response instead of clarifying. The focused scenario
+subsequently passed. Preserve both outcomes; the full run was not a clean pass.
+
+**Delivery blockers found during broader checks:** normal treatment-memory recall
+and participant isolation passed, but the fault-injection recovery scenario did
+not consistently pass. Additional model timeouts produced a pending response;
+one run failed to retain an additional condition assertion. A traced run later
+stored both facts, which does not explain or resolve the earlier omission.
+One weight follow-up also described a value as healthy while acknowledging that
+the retrieved literature supplied no relevant threshold. These memory and answer
+grounding findings remain unresolved; do not describe the full system as validated
+for delivery. Diagnostic artifacts are kept locally under
+`output/fhir_public_api_validation/`, outside Git. The partner ontology was not changed.
 
 ## Before updating the mirror
 
@@ -124,8 +150,8 @@ MAYA_ENABLE_PHYXIO_IO=1
 - `biomarkers.json`: copy `maya/framework/integrations/biomarkers/config.fhir.example.json`.
   Set `fhir.client_config_path` to the credential file, and set `patient_map` to
   `{"UCLM-CONFIRMED-PARTICIPANT-ID": "CONFIRMED-FHIR-PATIENT-ID"}`. The left side
-  must exactly match `session.json`. The right side is the Patient ID without the
-  `Patient/` prefix. UCLM must confirm the relationship; no default exists.
+  must exactly match `session.json`. The right side is the participant's actual
+  Phyxio username, without the `Patient/` prefix; no default exists.
 - The real FHIR example exposes blood pressure, heart rate and body weight.
   Glucose is not supported by the supplied library's current catalogue; do not
   copy the dummy glucose configuration into the real provider.
@@ -134,6 +160,69 @@ An explicit `--session-config` overrides `MAYA_SESSION_CONFIG`. Process environm
 variables override `.env`; a service's old environment may otherwise select dummy
 providers even after `.env` is edited. Changing these files does not switch a
 running participant session. Stop on logout; launch with the next login payload.
+
+## FHIR public API and current limits
+
+The adapter follows the supplied **LibFHIR Usage Guide, 26.10.16**, pages 3 and 7:
+initialize `FHIRProxyClient`, call `client.get(resource_type, subject=patient_id)`,
+and read each `record.dump()`. It does not construct HTTP requests, access private
+client attributes, inspect the SDK's internal catalogue or modify the partner library.
+The previous private-transport workaround was removed on 20 October 2026.
+
+The three enabled measurement types are a deployment choice, not the full library
+catalogue. Additional documented Observation types can be enabled through `catalog`
+and `fhir.resource_types`; Python contains no list of allowed measurement codes.
+The tool intentionally reads latest measurements, as required by MAYA. Date-range
+searches, record-ID searches and writes are not part of this conversational tool.
+The SDK supports those operations separately; they are not required to use its read API.
+
+Both documented authentication forms are supported in the private credential JSON:
+`url` plus `token`, or `url`, `token: null` and `token_file`. A relative token-file
+path is resolved against the credential file's directory. HTTPS and certificate
+verification remain application requirements.
+
+**Migration:** remove `fhir.timeout_seconds` from existing private biomarker
+configuration files. The public SDK offers no request-timeout parameter. Keeping
+that setting now produces a configuration error rather than silently ignoring it.
+There is currently no application-enforced FHIR request deadline; a stalled request
+can hold up its conversational turn. UCLM needs to provide a supported timeout
+mechanism before bounded response time can be claimed.
+
+Known behaviour of the supplied 26.10.16 SDK, reproduced locally:
+
+- `record.dump()` drops scalar quantity units. Compound components preserve theirs.
+  MAYA requires a supplied unit or unit code for numeric FHIR quantities, including
+  components. It rejects an observation that fails this check and reports the lookup
+  as unavailable; a reference range or a conventional unit cannot fill the gap.
+  Scalar readings such as weight and heart rate therefore remain unusable through
+  this SDK version until UCLM preserves their units. Blood-pressure components with
+  units work. Prompt-only warnings did not reliably prevent an assumed unit in testing,
+  so invalid quantities are withheld from both readout and HealthRAG.
+- The documented whole-second UTC `Z` timestamps work. Other timestamp forms can
+  fail parsing. The SDK can omit records that fail parsing, so this integration
+  cannot independently prove that returned history is complete. “Latest” means
+  latest eligible among the records the SDK returned.
+- `get()` can return the same empty list for no records and some network, protocol
+  or parsing errors. An entirely ambiguous empty lookup is reported as unavailable,
+  never as proof that the participant has no measurements. If another requested
+  measurement returned records, those can be shown and the unresolved measurements
+  are listed as not returned. An explicit SDK failure (`None`) fails the lookup.
+- Numeric HTTP status and raw FHIR fields discarded by the SDK are not available
+  through the public result. Diagnostics must not claim those details were verified.
+
+MAYA validates participant ownership and quantity units, applies configured accepted statuses,
+and selects latest timestamps locally while preserving ties. For an interval it
+uses the period end (or start if absent) for ordering. Its internal Observation
+envelope contains all SDK-serialized fields: identity, status and reference ranges
+are represented separately; remaining fields go in `result`. This is application
+translation of `dump()`, not a replacement SDK parser.
+
+These limitations must be reported to UCLM; using the public API alone does not
+establish production readiness. Tests of synthetic HTTP responses do not establish
+real participant access or mirror audio/ICE operation. Run
+`python -m maya.tests.live_fhir_scenarios` for supervisor and main-runner scenarios
+using real models/retrieval, the actual SDK parser, synthetic FHIR HTTP and RAM memory.
+Actual microphone and speech playback are excluded from this Mac test.
 
 ## Diagnose configuration before starting conversation
 
@@ -170,9 +259,10 @@ the resulting report local because it contains the MAYA participant ID.
 
 `ok` means records were read; `no_data` means the request completed but no eligible
 records were found. Both exit 0; `configured` is only possible without `--fetch`.
-A failed/unavailable check exits 1. No synthetic fallback is used. A successful
-FHIR check still requires UCLM to confirm that the configured Patient belongs to
-the participant, and that the proxy returns complete relevant history.
+A failed/unavailable check exits 1. No synthetic fallback is used. The public FHIR
+SDK's ambiguous empty results fail the check; see the limitations above.
+A successful FHIR check still requires a verified username binding and confirmation
+that the returned records are sufficient for the intended use.
 
 ## Validate conversation on the mirror
 
@@ -209,9 +299,10 @@ login/logout to process lifecycle, keep testing supervised with one participant.
 | Slice-file or certificate error | Verify UCLM's Debian package/system files, permissions and connector version. Do not enable the unused ICE compatibility shim. |
 | No Phyxio client connected | Check browser login/page reload, certificate trust and connector logs. Only one client should connect. |
 | Port 1560 busy / another runner active | Stop the old service/process, including suspended ones. Do not delete a lock file to bypass a running process. `ss -ltnp` identifies listeners on Linux. |
-| FHIR `patient_map` missing | Obtain the confirmed MAYA-to-FHIR relationship from UCLM; credentials alone are insufficient. |
-| FHIR `HTTPError` | The diagnostic includes `http_status`. For 401/403, check credentials/permissions with UCLM; do not paste the token into logs or chat. |
-| FHIR `ValueError` after configuration passed | The proxy response or returned resource failed validation. Confirm resource types, patient reference, timestamps and response contract with UCLM. |
+| FHIR `patient_map` missing | Map the startup MAYA ID to the participant's confirmed Phyxio username. Credentials alone do not identify the patient. |
+| FHIR lookup unavailable | The public SDK does not reliably distinguish empty data, access failure and parsing failure. Inspect private SDK logs for UCLM support; do not share tokens or raw records. |
+| FHIR `ValueError` after configuration passed | The SDK returned no verifiable observations, failed, or supplied a record that failed validation. Do not infer that the patient has no records. |
+| Configuration error at `fhir.timeout_seconds` | Remove the obsolete setting. The public SDK has no supported request-timeout option; see the migration and delivery limitation above. |
 | `no_data` | Confirm this account really has records and the correct patient mapping/statuses. Empty results are distinct from connection failure. |
 | Exercise `unavailable` | Check connection, pagination bounds, timeout and native response shape. `phyxio.max_pages` limits traversal; increase it only for confirmed longer histories. |
 | Microphone “Device unavailable” | Check service-account audio access, other microphone users and `MAYA_MIC_DEVICE`. List devices with `.venv/bin/python -m sounddevice`. |
