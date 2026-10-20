@@ -73,7 +73,7 @@ def make_service():
     }
     service.session_history_reader.return_value = reader
     service.show_routine.return_value = "Showing routine"
-    service.calibrate_routine.return_value = "Calibrated routine"
+    service.calibrate_routine.return_value = "Calibration requested"
     service.run_routine.return_value = "Started routine"
     return service
 
@@ -98,7 +98,7 @@ class ExerciseServiceContractTests(unittest.TestCase):
     def test_all_five_actions_reach_the_real_tool_wrappers(self):
         cases = [
             ("show_exercises", [call.get_routine_list(), call.show_routine("42")], "Showing routine"),
-            ("calibrate_exercises", [call.get_routine_list(), call.calibrate_routine("42")], "Calibrated routine"),
+            ("calibrate_exercises", [call.get_routine_list(), call.calibrate_routine("42")], "Calibration requested"),
             ("start_exercises", [call.get_routine_list(), call.run_routine("42")], "Started routine"),
             ("list_exercises", [call.get_routine_list()], "Seated march"),
             ("get_exercise_history", [call.session_history_reader("offline-user", 5000), call.get_routine_list()], "8/8 reps"),

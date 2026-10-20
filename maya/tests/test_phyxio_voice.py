@@ -162,6 +162,34 @@ class PhyxioVoiceTests(unittest.TestCase):
         self.assertTrue(self.streams[0].closed)
         self.assertTrue(self.service.asr_queue.empty())
 
+    def test_avatar_second_tap_cancels_capture_then_allows_fresh_recording(self):
+        entered, release = Event(), Event()
+        def capture():
+            entered.set()
+            release.wait(1)
+            return BytesIO(), {'peak': .2, 'speech_seen': True}
+        with patch.object(self.service, '_record_until_pause', side_effect=capture), \
+                patch.object(self.service, '_transcribe_wav') as transcribe:
+            self.assertTrue(self.connector.change_interaction_state_request(True)[0])
+            try:
+                self.assertTrue(entered.wait(1))
+                first = self.service._record_thread
+                self.assertTrue(self.connector.change_interaction_state_request(True)[0])
+                self.assertTrue(self.service._cancel_recording.is_set())
+                self.assertFalse(self.connector.change_interaction_state_request(True)[0])
+                self.assertIs(self.service._record_thread, first)
+            finally:
+                release.set()
+                self.finish_worker()
+        transcribe.assert_not_called()
+        self.assertTrue(self.service.asr_queue.empty())
+        self.calls.end.assert_called_once()
+        with patch.object(self.service, '_record_until_pause', return_value=(BytesIO(), {'peak': .2, 'speech_seen': True})), \
+                patch.object(self.service, '_transcribe_wav', return_value='Hello again'):
+            self.assertTrue(self.connector.change_interaction_state_request(True)[0])
+            self.finish_worker()
+        self.assertEqual(self.service.asr_queue.get_nowait(), 'Hello again')
+
     def test_stalled_and_inactive_streams_finish_and_release_microphone(self):
         for active in (True, False):
             with self.subTest(active=active), \
@@ -174,22 +202,25 @@ class PhyxioVoiceTests(unittest.TestCase):
             self.calls.end.assert_called()
 
     def test_cancellation_during_transcription_discards_late_result(self):
-        entered, release = Event(), Event()
-        def transcribe(_wav):
-            entered.set()
-            release.wait(1)
-            return 'A cancelled question'
-        with patch.object(self.service, '_record_until_pause', return_value=(BytesIO(), {'peak': .2, 'speech_seen': True})), \
-                patch.object(self.service, '_transcribe_wav', side_effect=transcribe):
-            self.connector.change_interaction_state_request(True)
-            try:
-                self.assertTrue(entered.wait(1))
-                self.connector.change_interaction_state_request(False)
-            finally:
-                release.set()
-                self.finish_worker()
-        self.assertTrue(self.service.asr_queue.empty())
-        self.calls.end.assert_called_once()
+        for active in (False, True):
+            with self.subTest(active=active):
+                entered, release = Event(), Event()
+                def transcribe(_wav):
+                    entered.set()
+                    release.wait(1)
+                    return 'A cancelled question'
+                with patch.object(self.service, '_record_until_pause', return_value=(BytesIO(), {'peak': .2, 'speech_seen': True})), \
+                        patch.object(self.service, '_transcribe_wav', side_effect=transcribe):
+                    self.connector.change_interaction_state_request(True)
+                    try:
+                        self.assertTrue(entered.wait(1))
+                        self.assertTrue(self.connector.change_interaction_state_request(active)[0])
+                    finally:
+                        release.set()
+                        self.finish_worker()
+                self.assertTrue(self.service.asr_queue.empty())
+                self.assertNotIn(call('A cancelled question'), self.calls.asr_text.call_args_list)
+        self.assertEqual(self.calls.end.call_count, 2)
 
     def test_stop_is_accepted_during_cooldown_and_thinking(self):
         self.service._cooldown_until = monotonic() + 10

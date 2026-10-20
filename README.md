@@ -62,13 +62,19 @@ the mirror. Partner ontology files are retained unchanged.
 
 The connector subclass only forwards Phyxio's documented callbacks; MAYA's speech
 logic lives in `PhyxioService`, so it cannot override the library's internal state
-methods. A cancelled recording must finish cleanup before a new one starts. Audio
+methods. On the mirror's single avatar control, tapping again while recording or
+transcribing cancels that voice input; cancelled text is not sent to the supervisor.
+Wait for cleanup before starting a fresh recording. This does not cancel a response
+already being generated or spoken. Audio
 queue waits check cancellation every `MAYA_VOICE_POLL_SECONDS` (default 0.1 seconds),
 and `MAYA_VOICE_SECONDS` bounds capture even when no frames arrive. On failure the
 interaction is closed so the user can retry; `MAYA_VOICE_ERROR_TEXT` controls the
 message. Select the mirror microphone with `MAYA_MIC_DEVICE` when its default input
 is unsuitable. Linux device access still needs checking under the deployed service
 account; this recovery does not make an unavailable device usable.
+The terminal's `/voice` path also honors `MAYA_MIC_DEVICE` and
+`MAYA_VOICE_POLL_SECONDS`, bounds capture when audio callbacks stop, and allows
+another input after capture cancellation, device failure or transcription failure.
 
 Voice-bridge validation on 19 October 2026: 246 offline tests passed, including
 12 callback/recovery tests. A separate check loaded UCLM's actual 26.5.29 connector

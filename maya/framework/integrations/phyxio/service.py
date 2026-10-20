@@ -194,15 +194,21 @@ class PhyxioService:
                 self._cancel_recording.set()
                 self._ui_off()
                 return True, ""
+            if self._recording:
+                if self._cancel_recording.is_set():
+                    return False, "Finishing cancellation. Please wait."
+                # The mirror's avatar sends active=True on every tap.
+                # A second tap cancels capture or ASR, until transcript delivery.
+                self._cancel_recording.set()
+                self._ui_off()
+                log.info("[PHYXIO] Active voice input cancelled by repeated avatar tap")
+                return True, ""
             if not self.client_connected:
                 return False, "I am not ready yet"
             if time.monotonic() < self._cooldown_until or self._requested_agent_state == "thinking":
                 return False, "One moment…"
             if self._tts_running.is_set() or not self._tts_queue.empty():
                 return False, "I'm speaking. Tap again when I finish."
-            if self._recording:
-                return False, "Already listening"
-
             self._cancel_recording.clear()
             self._recording = True
             self._start_interaction()
@@ -220,7 +226,7 @@ class PhyxioService:
     # Recording + Whisper ASR
     # -----------------------------
     def _record_transcribe_once(self) -> None:
-        delivered = False
+        text = ""
         try:
             wav, stats = self._record_until_pause()
             log.info("[mic] %s", stats)
@@ -235,29 +241,27 @@ class PhyxioService:
             self._ui_off()
             self._user_set_text("Transcribing…")
             text = self._transcribe_wav(wav)
-            log.info("[ASR] %r", text)
-
-            if self._cancel_recording.is_set():
-                return
-
-            if not text:
+            if not text and not self._cancel_recording.is_set():
                 self._user_set_text("No speech detected. Tap and try again.")
-                return
-
-            # show transcript then push to agent
-            self._user_set_text(text)
-            self.asr_queue.put(text)
-            delivered = True
 
         except Exception:
+            text = ""
             log.exception("ASR failed")
-            self._user_set_text(self.voice.error_text)
+            if not self._cancel_recording.is_set():
+                self._user_set_text(self.voice.error_text)
         finally:
-            self._ui_off()
-            if not delivered and not self._tts_running.is_set() and self._tts_queue.empty():
-                self._end_interaction()
             with self._lock:
-                self._recording = False
+                try:
+                    self._ui_off()
+                    # Commit delivery and finish cleanup atomically with taps.
+                    if text and not self._cancel_recording.is_set():
+                        log.info("[ASR] %r", text)
+                        self._user_set_text(text)
+                        self.asr_queue.put(text)
+                    elif not self._tts_running.is_set() and self._tts_queue.empty():
+                        self._end_interaction()
+                finally:
+                    self._recording = False
 
     def _record_until_pause(self) -> tuple[BytesIO, dict]:
         v = self.voice
@@ -511,7 +515,7 @@ class PhyxioService:
                 return {
                     "show": "Showing routine",
                     "run": "Started routine",
-                    "calibrate": "Calibrated routine",
+                    "calibrate": "Calibration requested",
                 }[action]
             except connect.UnableToPerform as err:
                 return f"Could not do that: {err.reason}"

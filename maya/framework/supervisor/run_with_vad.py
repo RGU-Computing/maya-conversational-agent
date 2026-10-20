@@ -13,6 +13,7 @@ from threading import Event
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
+from math import isfinite
 import time
 import numpy as np
 import sounddevice as sd
@@ -39,6 +40,11 @@ load_dotenv()
 class VoiceConfig:
     seconds: float
     rate: int
+    poll_seconds: float = 0.1
+
+    def __post_init__(self):
+        if any(not isfinite(value) or value <= 0 for value in (self.seconds, self.poll_seconds)):
+            raise ValueError("Voice duration and polling interval must be finite and positive.")
 
 
 VAD_AGGRESSIVENESS = int(os.getenv("MAYA_VAD_AGGRESSIVENESS", "3"))
@@ -172,15 +178,26 @@ def read_text(
                 print(f"[audio] {status}", file=sys.stderr)
             audio_queue.put(indata.copy())
 
+        mic_device = os.getenv("MAYA_MIC_DEVICE")
+        deadline = time.monotonic() + voice.seconds
         with sd.InputStream(
             samplerate=voice.rate,
             channels=1,
             dtype="int16",
+            device=int(mic_device) if mic_device else None,
             blocksize=frame_samples,
             callback=callback,
-        ):
+        ) as stream:
             while True:
-                block = audio_queue.get().reshape(-1)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    block = audio_queue.get(timeout=min(voice.poll_seconds, remaining)).reshape(-1)
+                except queue.Empty:
+                    if not stream.active:
+                        raise OSError("Microphone stopped delivering audio.")
+                    continue
                 total_frames += len(block)
                 pcm = block.tobytes()
                 rms = float(np.sqrt(np.mean(block.astype(np.float32) ** 2)) / 32768.0)
@@ -265,7 +282,15 @@ def read_text(
                     print("Whisper key not configured. Please provide text input instead.")
                     continue
                 return None if blank_returns_none else ""
-            spoken_text = capture_voice()
+            try:
+                spoken_text = capture_voice()
+            except KeyboardInterrupt:
+                print("\nVoice input cancelled.")
+                continue
+            except Exception as voice_err:
+                print(f"[voice] {type(voice_err).__name__}")
+                print(os.getenv("MAYA_VOICE_ERROR_TEXT", "Voice input is temporarily unavailable. Please tap to try again."))
+                continue
             if not spoken_text:
                 print("No speech detected. Try again.")
                 continue
@@ -440,10 +465,13 @@ def main(session: SessionConfig | None = None) -> None:
     app = build_supervisor()
 
     phyxio_io = init_phyxio_io(session)
+    if phyxio_io is not None:
+        atexit.register(phyxio_io.stop)
     asr_client, asr_model = (None, None) if phyxio_io is not None else init_asr()
     voice = VoiceConfig(
         seconds=VOICE_SECONDS,
         rate=VOICE_RATE,
+        poll_seconds=float(os.getenv("MAYA_VOICE_POLL_SECONDS", "0.1")),
     )
     tts = None if phyxio_io is not None else init_tts(session.preferences)
 
@@ -539,4 +567,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run MAYA with optional onboarding settings.")
     parser.add_argument("--session-config", type=Path, help="JSON participant ID and preferences")
     args = parser.parse_args()
-    main(load_session(args.session_config))
+    try:
+        main(load_session(args.session_config))
+    except KeyboardInterrupt:
+        pass
