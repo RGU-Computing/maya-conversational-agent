@@ -20,7 +20,7 @@ import sounddevice as sd
 import soundfile as sf
 import webrtcvad
 from dotenv import load_dotenv
-from openai import BadRequestError
+from openai import APIError, BadRequestError
 import azure.cognitiveservices.speech as speechsdk
 from langgraph.types import Command
 
@@ -31,7 +31,7 @@ if __package__ in {None, ""}:
 
 from maya.framework.conversation.personalization import Preferences, SessionConfig, load_session
 from maya.framework.integrations.speech import init_asr, init_tts, transcribe
-from maya.framework.conversation.responses import load_response_policy, response_text
+from maya.framework.conversation.responses import ResponseText, load_response_policy, response_text
 
 load_dotenv()
 
@@ -522,22 +522,25 @@ def main(session: SessionConfig | None = None) -> None:
                 response_ready = Event()
                 progress_speech = None
                 try:
-                    final_text, interrupts = stream_updates(
-                        app, payload, base_config, phyxio_io, on_health_processing=announce_health_processing,
-                    )
-                except Exception as err:
-                    if is_tool_call_history_error(err):
-                        new_thread = session.graph_config()["configurable"]["thread_id"]
-                        base_config["configurable"]["thread_id"] = new_thread
-                        print(
-                            "[runner] recovered from invalid stored tool-call history; "
-                            f"switched to thread_id={new_thread} and retrying."
-                        )
+                    try:
                         final_text, interrupts = stream_updates(
                             app, payload, base_config, phyxio_io, on_health_processing=announce_health_processing,
                         )
-                    else:
-                        raise
+                    except Exception as err:
+                        if not is_tool_call_history_error(err):
+                            raise
+                        base_config = session.graph_config()
+                        print("[runner] recovered from invalid stored tool-call history; retrying in a new thread.")
+                        final_text, interrupts = stream_updates(
+                            app, payload, base_config, phyxio_io, on_health_processing=announce_health_processing,
+                        )
+                except APIError as err:
+                    # Do not automatically replay a rejected/failed message. The next
+                    # user request starts clean, without an unfinished tool/interrupt turn.
+                    base_config = session.graph_config()
+                    text = load_response_policy().request_unavailable_text
+                    final_text, interrupts = ResponseText(text, text), []
+                    print(f"[runner] model request failed ({type(err).__name__}); ready for a new request.")
                 finally:
                     # Cancel a pending acknowledgement; finish one already started.
                     response_ready.set()

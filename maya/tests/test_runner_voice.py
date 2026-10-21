@@ -72,5 +72,64 @@ class RunnerVoiceTests(unittest.TestCase):
                     runner.VoiceConfig(**{"seconds": 1, "rate": 16000, field: value})
 
 
+class RunnerProviderFailureTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(runner.os, "chdir"))
+        self.enterContext(patch.object(runner.atexit, "register"))
+        self.enterContext(patch.object(runner, "acquire_single_instance_lock", return_value=Mock()))
+        self.enterContext(patch.object(runner, "build_supervisor", return_value=Mock()))
+        self.enterContext(patch.object(runner, "init_phyxio_io", return_value=Mock()))
+        self.read = self.enterContext(patch.object(runner, "read_text"))
+        self.speak = self.enterContext(patch.object(runner, "speak_output"))
+        self.printed = self.enterContext(patch("builtins.print"))
+        self.session = runner.SessionConfig(user_id="synthetic-recovery")
+        self.policy = runner.load_response_policy().model_copy(update={"request_unavailable_text": "Configured retry message."})
+        self.enterContext(patch.object(runner, "load_response_policy", return_value=self.policy))
+
+    @staticmethod
+    def rejected():
+        import httpx
+        return runner.BadRequestError("private rejected content", response=httpx.Response(
+            400, request=httpx.Request("POST", "https://model.invalid")), body={"code": "content_filter"})
+
+    def exercise(self, error, *, resumed=False):
+        from types import SimpleNamespace
+        from copy import deepcopy
+        self.read.side_effect = ["First question", "Clarification reply", "Fresh question", None] if resumed else ["First question", "Fresh question", None]
+        seen = []
+        outcomes = iter(([(None, [SimpleNamespace(value="Which result?")])] if resumed else []) +
+                        [error, (runner.ResponseText("Recovered", "Recovered"), [])])
+        def stream(app, payload, config, *args, **kwargs):
+            seen.append((payload, deepcopy(config)))
+            outcome = next(outcomes)
+            if isinstance(outcome, Exception): raise outcome
+            return outcome
+        with patch.object(runner, "stream_updates", side_effect=stream):
+            runner.main(self.session)
+        self.assertEqual(len(seen), 3 if resumed else 2)
+        self.assertNotEqual(seen[-1][1]["configurable"]["thread_id"], seen[-2][1]["configurable"]["thread_id"])
+        self.assertTrue(all(config["configurable"]["user_id"] == self.session.user_id for _, config in seen))
+        spoken = [call.args[2] for call in self.speak.call_args_list]
+        self.assertEqual(spoken[-2:], [self.policy.request_unavailable_text, "Recovered"])
+        self.assertTrue(all(call.kwargs.get("end_interaction") for call in self.speak.call_args_list))
+        self.assertNotIn("private rejected content", str(self.printed.call_args_list))
+
+    def test_provider_rejection_does_not_exit_or_automatically_replay(self):
+        self.exercise(self.rejected())
+
+    def test_provider_rejection_during_resume_allows_fresh_question(self):
+        self.exercise(self.rejected(), resumed=True)
+
+    def test_network_timeout_and_rate_limit_allow_fresh_question(self):
+        import httpx
+        from openai import APIConnectionError, APITimeoutError, RateLimitError
+        request = httpx.Request("POST", "https://model.invalid")
+        for error in (APIConnectionError(request=request), APITimeoutError(request=request),
+                      RateLimitError("private rejected content", response=httpx.Response(429, request=request), body=None)):
+            with self.subTest(error=type(error).__name__):
+                self.speak.reset_mock();self.printed.reset_mock()
+                self.exercise(error)
+
+
 if __name__ == "__main__":
     unittest.main()

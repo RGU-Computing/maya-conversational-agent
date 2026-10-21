@@ -13,6 +13,25 @@
       "heart_rate": "heart-rate",
       "body_weight": "body-weight"
     },
-    "timeout_seconds": 10
+    "observation_codes": {
+      "blood_pressure": [
+        {
+          "system": "http://loinc.org",
+          "code": "85354-9"
+        }
+      ],
+      "heart_rate": [
+        {
+          "system": "http://loinc.org",
+          "code": "8867-4"
+        }
+      ],
+      "body_weight": [
+        {
+          "system": "http://loinc.org",
+          "code": "29463-7"
+        }
+      ]
+    }
   }
 }

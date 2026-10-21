@@ -32,7 +32,11 @@ uv pip install --python .venv/bin/python -r requirements.txt
 Keep the deployment's existing `.env`; for a new installation, use `.env.example`
 as the template and supply the actual service credentials. Supply a participant
 configuration following `maya/session.example.json`, with the real participant ID.
-Local `.env` and `maya/session.json` files are excluded from Git.
+Local `.env` and `maya/session.json` files are excluded from Git by default.
+The reviewed [mirror profile](deployment/mirror/README.md) includes the explicitly
+authorized session identity, confirmed FHIR mapping and non-secret settings used
+on this mirror. Credentials are supplied separately; active private files remain
+unchanged when this profile is committed.
 
 ```bash
 .venv/bin/python -m unittest discover -s maya/tests -p 'test_*.py' -q
@@ -255,61 +259,91 @@ memory ingestion is not part of this integration.
 ### UCLM FHIR provider
 
 The same tool supports `provider: "fhir"` through
-`maya/framework/integrations/biomarkers/fhir.py`. Install UCLM's supplied wheel in the runner's
-environment (the mirror may already provide the library):
+`maya/framework/integrations/biomarkers/fhir.py`. Install UCLM's supplied
+`libfhir-26.10.16-py3-none-any.whl` into the actual runner environment. The adapter
+requires this version; the older OS-provided 25.5.14 package is not a substitute.
+Use `uv sync --locked --inexact` to preserve separately installed partner packages.
 
-```bash
-uv pip install --python .venv/bin/python /path/to/libfhir-26.10.16-py3-none-any.whl
-```
+Keep the decrypted credential JSON outside the repository (directory `700`, file
+`600`). The documented credential forms are `url`, `token`, `is_secure`, or `url`,
+`token: null`, `token_file`, `is_secure`. A relative `token_file` is resolved against
+the credential JSON's directory; missing/empty files fail configuration. HTTPS
+and certificate verification are required. Never log or commit credentials.
 
-This partner package is installed separately, not fetched from a similarly named
-public package. Use `uv sync --locked --inexact` to preserve it during updates.
+Copy `config.fhir.example.json` to a private location and configure:
 
-Decrypt Oscar's configuration locally into a private directory outside the
-repository, with directory permissions `700` and file permissions `600`. The
-runtime reads the decrypted JSON (`url`, `token`, `is_secure`); it does not need
-GPG or the private key. Copy `config.fhir.example.json` into that directory and
-set:
+- `fhir.client_config_path`: credential JSON path, absolute or relative to the
+  biomarker configuration file.
+- `patient_map`: confirmed MAYA user IDs mapped to FHIR Patient IDs. Oscar confirms
+  the FHIR Patient ID is the Phyxio login username; obtain that username from the
+  participant/UCLM rather than inferring it from a browser URL or local account.
+- `catalog`, `fhir.resource_types` and `fhir.observation_codes`: measurement labels,
+  documented SDK type names and accepted coding system/code pairs. The example
+  uses the supplied 16 October 2026 guide's LOINC codes for blood pressure, heart
+  rate and body weight. These are configuration, not a private SDK catalogue.
+  All three mappings must cover the same measurement IDs. Unsupported SDK types
+  cannot be validated through a public catalogue and may produce unavailable reads.
 
-- `fhir.client_config_path`: path to the credential JSON, relative to this
-  configuration file or absolute.
-- `patient_map`: confirmed MAYA user IDs mapped to FHIR Patient IDs. There is no
-  fallback or assumption that the two IDs match.
-- `catalog` and `fhir.resource_types`: the measurement descriptions exposed to
-  agents and their corresponding names from `libfhir.ResourceCreator.supported_observations`.
-  Add or remove measurements in configuration, not Python. Unsupported names
-  fail at startup; glucose is not in the supplied library's current catalogue.
-- `fhir.timeout_seconds`: HTTP connection/read timeout per requested measurement.
+Select the private file with `MAYA_BIOMARKER_CONFIG` and launch the usual
+`python -m maya.framework.supervisor.run_with_vad` with the session configuration.
+The repository default remains disabled and the example patient map is empty.
 
-Select this configuration using `MAYA_BIOMARKER_CONFIG` and run the usual
-`python -m maya.framework.supervisor.run_with_vad` command. The repository default
-remains disabled; the FHIR example has an empty patient map until UCLM confirms
-the mapping. Never put credentials or participant mappings into tracked files.
+The adapter imports `FHIRProxyClient` from `libfhir.client`, calls only
+`client.get(resource_type, subject=patient_id)` and serializes each returned record
+with `record.dump()`. It has no custom HTTP transport or private SDK dependencies.
+It validates the exact patient reference and configured measurement coding, filters
+accepted statuses, and retains every field returned by `dump()`, including components,
+units and reference ranges. The validated subject is consequently present in the
+result context; treat persisted tool results as participant data. No FHIR writes occur.
+Malformed quantities (including string/boolean/missing numeric values) also fail
+validation. Distinct records tied at the latest timestamp remain distinct in the
+readout; a corrected status alone does not establish a replacement relationship.
 
-The adapter makes only scoped `/record/get` requests using libfhir's transport,
-with HTTPS verification, a timeout and no redirects. It reads raw FHIR JSON
-because libfhir 26.10.16's parsed objects lose scalar units and reject timestamp
-offsets/fractions. Source quantities, components, measurement context and reference
-ranges are preserved without inventing units. Patient references must match
-`Patient/<configured ID>` and measurement codes must match the library's catalogue.
-Missing/ambiguous timestamps or malformed responses produce `unavailable`, not
-an apparently empty medical history.
+Limitations verified against the installed 26.10.16 SDK:
 
-For each measurement, the adapter selects the latest accepted records returned
-by the proxy, preserving ties. Period measurements use the period end (or start
-when open) and retain the original period. The supplied proxy interface exposes
-no pagination controls; completeness of returned history still needs validation
-with UCLM's real patient data. No patient records are created or changed.
+- Scalar `valueQuantity` serialization drops units. Numeric quantities without a
+  source unit or a coding system/unit code are rejected as `unavailable`. No units
+  are inferred from the measurement type. Ordinary scalar heart rate/weight reads
+  therefore remain blocked by SDK serialization even when the source had units.
+- `get()` can return `[]` for a genuine empty search, network/proxy errors or omitted
+  records, and `None` for HTTP errors. These outcomes become `unavailable`, never
+  proof that the participant has no records. Exceptions and invalid records also
+  fail the whole requested lookup rather than exposing partial results as success.
+- The SDK accepts UTC timestamps with second precision (`...Z`); offsets and
+  fractional seconds can cause records to be omitted. Absence-only observations
+  and open periods are also not fully supported. Partial omissions are not visible
+  through the public API. MAYA selects the latest **returned, parseable, accepted**
+  records, preserving timestamp ties, and cannot guarantee complete history or the
+  newest server record. Fields the SDK itself discards cannot be recovered.
+- The public API has no supported request timeout. There is **no bounded network
+  timeout** for a FHIR lookup. Remove the obsolete timeout setting when migrating
+  private configuration, after backing it up. HTTPS verification remains enabled;
+  redirect handling is owned by the SDK/requests and is not overridden by MAYA.
 
-Adapter tests use synthetic HTTP responses. For real supervisor routing,
-clarification/resume and retrieval with the adapter and simulated HTTP, run
-`python -m maya.tests.live_fhir_scenarios`. A successful device-list request verifies
-connectivity only; real biomarker retrieval requires a confirmed test patient.
+Offline tests characterize the installed SDK with an in-memory HTTP boundary and
+exercise the adapter with synthetic public API responses. For real models,
+supervisor routing, ontology lookup, clarification, retrieval and failure handling,
+run `python -m maya.tests.live_fhir_scenarios`. For the actual typed main loop, run
+`python -m maya.tests.live_fhir_runner_scenarios`. Both isolate participant memory
+in RAM and simulate service responses; the runner check also simulates audio.
+They do not establish live FHIR access or microphone/speaker operation. See
+[the mirror handover](docs/MIRROR_HANDOVER.md) for current results and blockers.
 
-Verified on 19 October 2026: 220 offline tests, seven live supervisor scenarios
-using simulated FHIR HTTP responses, and a typed-input `run_with_vad` check passed.
-The new adapter also completed a real read-only device request to UCLM. Participant
-data, microphone/speaker playback and mirror ICE were not exercised by these checks.
+The main runner handles model-provider API failures with the configured
+`request_unavailable_text` in `maya/framework/conversation/response_policy.json`, then
+accepts a fresh request in a new thread for the same participant. It does not
+automatically replay a rejected message. Existing participant memory remains;
+immediate conversational context in the failed thread is not resumed. Custom
+response-policy files must include this field.
+
+Phyxio capture requires both sufficient audio energy and WebRTC voice activity
+before transcription. `MAYA_VOICE_MIN_SPEECH_SECONDS` (default `0.2`) controls the
+minimum detected speech duration; `MAYA_VOICE_VAD_MODE` (default `2`, range `0–3`)
+controls detector aggressiveness. The sample rate must be 8000, 16000, 32000 or
+48000 Hz. Existing capture-duration, silence and microphone settings still apply.
+These checks reduce noise-triggered transcriptions; they cannot guarantee correct
+recognition in every acoustic environment. No language or transcript blacklist is
+used, and the participant's ASR-language preference is unchanged.
 
 Tests: `python -m unittest discover -s maya/tests -p 'test_*.py' -q`.
 Explicit live model/retrieval smoke test with synthetic fixtures and RAM-only

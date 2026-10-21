@@ -109,7 +109,7 @@ class PhyxioVoiceTests(unittest.TestCase):
         stream.assert_not_called()
 
     def test_open_failure_resets_ui_and_next_tap_succeeds(self):
-        block = np.full((1600, 1), .2, dtype=np.float32)
+        block = np.full((4800, 1), .2, dtype=np.float32)
         with patch.object(self.module.sd, 'InputStream', side_effect=self.module.sd.PortAudioError('Device unavailable', -9985)), \
                 self.assertLogs(level='ERROR'):
             self.assertTrue(self.connector.change_interaction_state_request(True)[0])
@@ -119,7 +119,9 @@ class PhyxioVoiceTests(unittest.TestCase):
         self.calls.asr_text.assert_called_with(self.service.voice.error_text)
         self.assertNotIn(call('listening'), self.calls.asr_state.call_args_list)
         with patch.object(self.module.sd, 'InputStream', side_effect=lambda **kw: self.stream(blocks=[block], **kw)) as audio, \
+                patch.object(self.module.webrtcvad, 'Vad') as vad, \
                 patch.object(self.service, '_transcribe_wav', return_value='How did I perform?'):
+            vad.return_value.is_speech.return_value = True
             self.assertTrue(self.connector.change_interaction_state_request(True)[0])
             self.finish_worker()
         self.assertEqual(self.service.asr_queue.get_nowait(), 'How did I perform?')
@@ -254,10 +256,57 @@ class PhyxioVoiceTests(unittest.TestCase):
             self.finish_worker()
 
     def test_invalid_capture_timings_are_rejected(self):
-        for field in ('poll_seconds', 'max_seconds'):
+        for field in ('poll_seconds', 'max_seconds', 'min_speech_seconds'):
             for value in (0, -1, float('inf'), float('nan')):
                 with self.subTest(field=field, value=value), self.assertRaises(ValueError):
                     self.module.VoiceConfig(**{field: value})
+
+    def test_short_noise_burst_does_not_reach_asr(self):
+        self.service.voice = self.module.VoiceConfig(max_seconds=.2, poll_seconds=.005)
+        blocks = [np.full((320, 1), .06, dtype=np.float32), np.zeros((3200, 1), dtype=np.float32)]
+        with patch.object(self.module.sd, 'InputStream', side_effect=lambda **kw: self.stream(blocks=blocks, **kw)), \
+                patch.object(self.service, '_transcribe_wav') as transcribe:
+            self.connector.change_interaction_state_request(True)
+            self.finish_worker()
+        transcribe.assert_not_called()
+        self.assertTrue(self.service.asr_queue.empty())
+        self.calls.end.assert_called_once()
+
+    def test_sustained_nonvoice_audio_does_not_reach_asr(self):
+        blocks = [np.full((4800, 1), .2, dtype=np.float32)]
+        with patch.object(self.module.sd, 'InputStream', side_effect=lambda **kw: self.stream(blocks=blocks, **kw)), \
+                patch.object(self.module.webrtcvad, 'Vad') as vad, \
+                patch.object(self.service, '_transcribe_wav') as transcribe:
+            vad.return_value.is_speech.return_value = False
+            self.connector.change_interaction_state_request(True)
+            self.finish_worker()
+        transcribe.assert_not_called()
+        self.assertTrue(self.streams[-1].closed)
+
+    def test_partial_callbacks_preserve_voiced_frames(self):
+        self.service.voice = self.module.VoiceConfig(max_seconds=.3, poll_seconds=.005)
+        blocks = [np.full((160, 1), .2, dtype=np.float32) for _ in range(30)]
+        with patch.object(self.module.sd, 'InputStream', side_effect=lambda **kw: self.stream(blocks=blocks, **kw)), \
+                patch.object(self.module.webrtcvad, 'Vad') as vad:
+            vad.return_value.is_speech.return_value = True
+            _, stats = self.service._record_until_pause()
+        self.assertTrue(stats['speech_seen'])
+        self.assertAlmostEqual(stats['speech_seconds'], .3)
+        self.assertTrue(all(len(c.args[0]) == 640 for c in vad.return_value.is_speech.call_args_list))
+
+    def test_invalid_vad_configuration_fails_before_capture(self):
+        for kwargs in ({'rate': 44100}, {'vad_mode': -1}, {'vad_mode': 4}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                self.module.VoiceConfig(**kwargs)
+
+    def test_silent_capture_deadline_is_not_a_device_failure(self):
+        # The final callback need not align exactly with the wall-clock deadline.
+        self.service.voice = self.module.VoiceConfig(max_seconds=.02, poll_seconds=.005)
+        blocks = [np.zeros((160, 1), dtype=np.float32)]
+        with patch.object(self.module.sd, 'InputStream', side_effect=lambda **kw: self.stream(blocks=blocks, **kw)):
+            _, stats = self.service._record_until_pause()
+        self.assertFalse(stats['speech_seen'])
+        self.assertTrue(self.streams[-1].closed)
 
 
 if __name__ == '__main__':

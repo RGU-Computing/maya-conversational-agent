@@ -1,4 +1,4 @@
-"""FHIR adapter contract tests. All patients, credentials and responses are synthetic."""
+"""Synthetic public-API contract tests; no UCLM network or participant records."""
 
 import copy
 import importlib.util
@@ -7,23 +7,23 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from maya.framework.integrations.biomarkers import load_biomarker_service
 from maya.tests.test_biomarkers import request
 
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "framework/integrations/biomarkers/config.fhir.example.json"
+CLIENT = "maya.framework.integrations.biomarkers.fhir.FHIRProxyClient"
 
 
 def observation(resource_type="blood-pressure", **updates):
-    from libfhir import ResourceCreator
-
+    codes = {"blood-pressure": "85354-9", "heart-rate": "8867-4", "body-weight": "29463-7"}
     record = {
         "resourceType": "Observation", "id": "measurement-1", "status": "final",
         "subject": {"reference": "Patient/synthetic-patient"},
         "effectiveDateTime": "2026-10-18T10:30:00Z",
-        "code": copy.deepcopy(ResourceCreator.supported_observations[resource_type]["code"]),
+        "code": {"coding": [{"system": "http://loinc.org", "code": codes[resource_type]}]},
         "component": [
             {"code": {"text": "Systolic"}, "valueQuantity": {"value": 134, "unit": "mmHg", "code": "mm[Hg]"}},
             {"code": {"text": "Diastolic"}, "valueQuantity": {"value": 82, "unit": "mmHg", "code": "mm[Hg]"}},
@@ -32,13 +32,26 @@ def observation(resource_type="blood-pressure", **updates):
     return {**record, **updates}
 
 
+class PublicRecord:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def dump(self):
+        return copy.deepcopy(self.payload)
+
+
+def records(*payloads):
+    return [PublicRecord(payload) for payload in payloads]
+
+
 def response(items=(), *, status=200, body=None):
+    """Transport fixture for installed SDK characterization only."""
     from requests import Response
 
     result = Response()
     result.status_code = status
     result._content = json.dumps(body if body is not None else {"status": "ok", "items": list(items)}).encode()
-    result._content_consumed = True  # Match requests' default non-streaming response.
+    result._content_consumed = True
     return result
 
 
@@ -51,7 +64,9 @@ def configured_service(folder):
     settings["patient_map"] = {"participant-001": "synthetic-patient"}
     config = folder / "biomarkers.json"
     config.write_text(json.dumps(settings))
-    with patch.dict(os.environ, {"MAYA_BIOMARKER_CONFIG": str(config)}):
+    # Substitute our dependency at the adapter boundary, never mutate UCLM classes.
+    with patch.dict(os.environ, {"MAYA_BIOMARKER_CONFIG": str(config)}), patch(CLIENT) as client:
+        client.return_value = Mock(spec=["get"])
         return load_biomarker_service()
 
 
@@ -61,135 +76,248 @@ class FHIRBiomarkerTests(unittest.TestCase):
         self.folder = TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
         self.service = configured_service(self.folder.name)
-        self.addCleanup(self.service.provider.client._session.close)
 
-    def fetch(self, records=(), *, ids=("blood_pressure",), **kwargs):
-        with patch.object(self.service.provider.client._session, "get", return_value=response(records, **kwargs)) as get:
-            result = self.service.fetch("participant-001", request(*ids), [])[0]
-        return result, get
+    def fetch(self, payloads=(), *, ids=("blood_pressure",), error=None):
+        get = self.service.provider.client.get
+        get.reset_mock()
+        get.side_effect = error
+        get.return_value = records(*payloads)
+        return self.service.fetch("participant-001", request(*ids), [])[0], get
 
-    def test_loads_provider_and_uses_scoped_read_only_contract(self):
+    def test_public_scoped_read_only_contract(self):
         result, get = self.fetch([observation()])
         self.assertEqual(result["status"], "ok")
         self.assertFalse(result["synthetic"])
-        get.assert_called_once_with("https://fhir.invalid/proxy/record/get",
-            json={"token": "synthetic-secret", "resource_type": "blood-pressure", "value": {"subject": "synthetic-patient"}},
-            verify=True, timeout=10, allow_redirects=False, headers={"Content-Type": "application/json"})
+        get.assert_called_once_with("blood-pressure", subject="synthetic-patient")
         self.assertNotIn("synthetic-secret", json.dumps(result))
-        self.assertNotIn("synthetic-patient", json.dumps(result))
+        self.assertEqual(result["observations"][0]["source"], "FHIR Observation/measurement-1")
 
-    def test_scalar_units_and_all_reference_ranges_are_preserved_without_defaults(self):
-        record = observation("body-weight", valueQuantity={"value": 150, "unit": "lb", "system": "unit-system", "code": "[lb_av]"},
-            referenceRange=[{"low": {"value": 100, "unit": "lb"}, "type": {"text": "source-defined"}}, {"text": "Other range"}])
-        del record["component"]
-        result, _ = self.fetch([record], ids=("body_weight",))
-        observed = result["observations"][0]
-        self.assertEqual(observed["result"]["valueQuantity"], record["valueQuantity"])
-        self.assertEqual(observed["reference_range"], {"ranges": record["referenceRange"]})
-        self.assertEqual(observed["source"], "FHIR Observation/measurement-1")
-        record["valueQuantity"].pop("unit")
-        result, _ = self.fetch([record], ids=("body_weight",))
-        self.assertNotIn("unit", result["observations"][0]["result"]["valueQuantity"])
-
-    def test_components_and_measurement_context_are_preserved(self):
-        record = observation(method={"text": "Home cuff"}, bodySite={"text": "Left arm"},
-                             note=[{"text": "Seated after rest"}], interpretation=[{"text": "Source interpretation"}])
+    def test_all_dump_fields_and_units_are_preserved(self):
+        record = observation(method={"text": "Home cuff"}, note=[{"text": "Seated"}],
+            extension=[{"url": "https://example.invalid/context", "valueString": "source context"}],
+            referenceRange=[{"low": {"value": 100, "unit": "mmHg"}}, {"text": "Other range"}])
         result, _ = self.fetch([record])
-        for field in ("component", "method", "bodySite", "note", "interpretation"):
-            self.assertEqual(result["observations"][0]["result"][field], record[field])
+        observed = result["observations"][0]
+        self.assertEqual(observed["result"], record)
+        self.assertEqual(observed["reference_range"], {"ranges": record["referenceRange"]})
+        observed["result"]["component"].clear()
+        self.assertEqual(len(record["component"]), 2)
 
-    def test_latest_uses_absolute_time_preserves_ties_and_excludes_invalid_status(self):
-        records = [observation(id="old", effectiveDateTime="2026-10-18T11:00:00+02:00"),
-                   observation(id="latest", effectiveDateTime="2026-10-18T10:30:00.125Z"),
-                   observation(id="tie", effectiveDateTime="2026-10-18T11:30:00.125+01:00"),
-                   observation(id="excluded", status="entered-in-error", effectiveDateTime="2026-10-19T12:00:00Z")]
-        result, _ = self.fetch(records)
+    def test_scalar_units_must_be_present_in_dump_not_invented_from_catalog(self):
+        record = observation("body-weight", valueQuantity={"value": 150, "unit": "lb"})
+        record.pop("component")
+        self.assertEqual(self.fetch([record], ids=("body_weight",))[0]["status"], "ok")
+        for quantity in ({"value": 150}, {"value": 150, "code": "kg"},
+                         {"value": 150, "unit": " "}, {"value": float("nan"), "unit": "kg"}):
+            record["valueQuantity"] = quantity
+            self.assertEqual(self.fetch([record], ids=("body_weight",))[0]["status"], "unavailable")
+        record["valueQuantity"] = {"value": 150, "system": "http://unitsofmeasure.org", "code": "[lb_av]"}
+        self.assertEqual(self.fetch([record], ids=("body_weight",))[0]["status"], "ok")
+
+    def test_component_and_range_quantities_require_units(self):
+        for field in ("component", "referenceRange"):
+            record = observation()
+            if field == "component":
+                record[field][0]["valueQuantity"] = {"value": 134}
+            else:
+                record[field] = [{"low": {"value": 100}}]
+            self.assertEqual(self.fetch([record])[0]["status"], "unavailable")
+
+    def test_malformed_quantity_values_cannot_bypass_unit_validation(self):
+        for quantity in ({"value": "134"}, {"value": True}, {"value": None},
+                         {"unit": "mmHg"}, "134", [134]):
+            with self.subTest(quantity=quantity):
+                record = observation()
+                record["component"][0]["valueQuantity"] = quantity
+                self.assertEqual(self.fetch([record])[0]["status"], "unavailable")
+
+    def test_latest_absolute_time_ties_and_accepted_statuses(self):
+        payloads = [observation(id="old", effectiveDateTime="2026-10-18T11:00:00+02:00"),
+                    observation(id="latest", status="amended", effectiveDateTime="2026-10-18T10:30:00.125Z"),
+                    observation(id="tie", status="corrected", effectiveDateTime="2026-10-18T11:30:00.125+01:00"),
+                    observation(id="excluded", status="entered-in-error", effectiveDateTime="2026-10-19T12:00:00Z")]
+        result, _ = self.fetch(payloads)
         self.assertEqual({r["id"] for r in result["observations"]}, {"latest", "tie"})
+        self.assertEqual(self.fetch([payloads[-1]])[0]["status"], "no_data")
 
-    def test_period_and_absent_measurement_are_explicit(self):
+    def test_period_and_absence_fields_if_returned_by_sdk(self):
         record = observation(effectivePeriod={"start": "2026-10-18T10:00:00Z", "end": "2026-10-18T11:00:00Z"})
         del record["effectiveDateTime"]
         result, _ = self.fetch([record])
         self.assertEqual(result["observations"][0]["measured_at"], "2026-10-18T11:00:00Z")
-        self.assertEqual(result["observations"][0]["result"]["effectivePeriod"], record["effectivePeriod"])
         del record["component"]
         record["dataAbsentReason"] = {"text": "Not measured"}
-        result, _ = self.fetch([record])
-        self.assertEqual(result["observations"][0]["result"]["dataAbsentReason"], {"text": "Not measured"})
+        self.assertEqual(self.fetch([record])[0]["observations"][0]["result"], record)
 
-    def test_empty_is_not_a_transport_or_protocol_failure(self):
-        self.assertEqual(self.fetch()[0]["status"], "no_data")
-        for status in (301, 401, 403, 404, 500):
-            with self.subTest(status=status):
-                self.assertEqual(self.fetch(status=status)[0]["status"], "unavailable")
-        for payload in ([], {}, {"status": "error", "message": "synthetic-secret"}, {"status": "ok", "items": None}):
-            with self.subTest(payload=payload):
-                result, _ = self.fetch(body=payload)
-                self.assertEqual(result["status"], "unavailable")
-                self.assertNotIn("synthetic-secret", json.dumps(result))
-
-    def test_connection_timeout_and_invalid_json_are_handled(self):
+    def test_empty_none_and_errors_are_unavailable_not_absent_records(self):
+        self.assertEqual(self.fetch()[0]["status"], "unavailable")
         from requests.exceptions import ConnectionError, SSLError, Timeout
+        for error in (Timeout, ConnectionError, SSLError, ValueError, RuntimeError):
+            result, _ = self.fetch(error=error("synthetic-secret"))
+            self.assertEqual(result["status"], "unavailable")
+            self.assertNotIn("synthetic-secret", json.dumps(result))
+        self.service.provider.client.get.side_effect = None
+        self.service.provider.client.get.return_value = None
+        self.assertEqual(self.service.fetch("participant-001", request("blood_pressure"), [])[0]["status"], "unavailable")
 
-        for error in (Timeout, ConnectionError, SSLError):
-            with self.subTest(error=error.__name__), patch.object(self.service.provider.client._session, "get", side_effect=error("synthetic-secret")):
-                result = self.service.fetch("participant-001", request("blood_pressure"), [])[0]
-                self.assertEqual(result["status"], "unavailable")
-                self.assertNotIn("synthetic-secret", json.dumps(result))
-        invalid = response()
-        invalid._content = b"not json"
-        with patch.object(self.service.provider.client._session, "get", return_value=invalid):
-            self.assertEqual(self.service.fetch("participant-001", request("blood_pressure"), [])[0]["status"], "unavailable")
+    def test_wrong_patient_measurement_and_malformed_records_rejected(self):
+        bad = [observation(subject={"reference": "Patient/someone-else"}),
+               observation(subject={"reference": "Patient/someone-else"}, status="entered-in-error"),
+               observation("heart-rate"), observation(effectiveDateTime="2026-10-18T10:00:00"),
+               observation(effectiveDateTime=None), observation(code={}), observation(resourceType="Patient"), None, {}]
+        for item in bad:
+            result, _ = self.fetch([observation(), item])
+            self.assertEqual(result["status"], "unavailable")
+            self.assertEqual(result["observations"], [])
 
-    def test_wrong_patient_wrong_measurement_and_malformed_records_are_rejected(self):
-        bad_records = [observation(subject={"reference": "Patient/someone-else"}),
-                       observation("heart-rate"), observation(effectiveDateTime="2026-10-18T10:00:00"),
-                       observation(effectiveDateTime=None), observation(code={}),
-                       observation(resourceType="Patient"), None, {}]
-        for record in bad_records:
-            with self.subTest(record=record):
-                result, _ = self.fetch([observation(), record])
-                self.assertEqual(result["status"], "unavailable")
-                self.assertEqual(result["observations"], [])
+    def test_identity_guards_do_not_call_server(self):
+        get = self.service.provider.client.get
+        self.assertEqual(self.service.fetch("unmapped", request("blood_pressure"), [])[0]["status"], "unmapped_patient")
+        self.assertEqual(self.service.fetch("participant-001", request("invented"), [])[0]["status"], "unsupported_measurement")
+        for subject in ("other", "unknown"):
+            self.assertEqual(self.service.fetch("participant-001", request("blood_pressure", subject=subject), []), [])
+        get.assert_not_called()
+        with self.assertRaises(ValueError):
+            self.service.provider.fetch_latest(" ", ["blood_pressure"])
+        get.assert_not_called()
 
-    def test_identity_guards_do_not_call_the_server(self):
-        with patch.object(self.service.provider.client._session, "get") as get:
-            self.assertEqual(self.service.fetch("unmapped", request("blood_pressure"), [])[0]["status"], "unmapped_patient")
-            self.assertEqual(self.service.fetch("participant-001", request("invented"), [])[0]["status"], "unsupported_measurement")
-            self.assertEqual(self.service.fetch("participant-001", request("blood_pressure", subject="other"), []), [])
-            get.assert_not_called()
-
-    def test_each_participant_uses_only_their_patient_mapping(self):
+    def test_each_participant_uses_only_their_mapping(self):
         self.service.config.patient_map = {"participant-a": "patient-a", "participant-b": "patient-b"}
-        for user_id, patient_id in self.service.config.patient_map.items():
-            record = observation(subject={"reference": f"Patient/{patient_id}"})
-            with patch.object(self.service.provider.client._session, "get", return_value=response([record])) as get:
-                result = self.service.fetch(user_id, request("blood_pressure"), [])[0]
-            self.assertEqual(result["status"], "ok")
-            self.assertEqual(get.call_args.kwargs["json"]["value"], {"subject": patient_id})
+        for user, patient in self.service.config.patient_map.items():
+            get = self.service.provider.client.get
+            get.reset_mock()
+            get.return_value = records(observation(subject={"reference": f"Patient/{patient}"}))
+            self.assertEqual(self.service.fetch(user, request("blood_pressure"), [])[0]["status"], "ok")
+            get.assert_called_once_with("blood-pressure", subject=patient)
 
-    def test_multiple_measurements_are_scoped_and_not_refetched_on_resume(self):
-        with patch.object(self.service.provider.client._session, "get", side_effect=[response([observation()]), response()]) as get:
-            results = self.service.fetch("participant-001", request("blood_pressure", "heart_rate"), [])
-            self.assertEqual(results[0]["missing"], ["heart_rate"])
-            self.assertEqual(self.service.fetch("participant-001", request("blood_pressure"), results), results)
-            self.assertEqual(get.call_count, 2)
+    def test_multiple_measurements_no_refetch_and_no_partial_success_after_failure(self):
+        get = self.service.provider.client.get
+        get.side_effect = [records(observation()), records(observation("heart-rate"))]
+        result = self.service.fetch("participant-001", request("blood_pressure", "heart_rate"), [])
+        self.assertEqual(result[0]["status"], "ok")
+        self.assertEqual(self.service.fetch("participant-001", request("blood_pressure"), result), result)
+        self.assertEqual(get.call_count, 2)
+        get.side_effect = [records(observation()), []]
+        result = self.service.fetch("participant-001", request("blood_pressure", "heart_rate"), [])[0]
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["observations"], [])
 
-    def test_invalid_mapping_and_insecure_credentials_fail_at_configuration(self):
-        config_path = Path(self.folder.name) / "biomarkers.json"
-        original = json.loads(config_path.read_text())
-        for value in ({}, {"blood_pressure": "not-a-libfhir-type", "heart_rate": "heart-rate", "body_weight": "body-weight"}):
-            config = copy.deepcopy(original)
-            config["fhir"]["resource_types"] = value
-            config_path.write_text(json.dumps(config))
-            with patch.dict(os.environ, {"MAYA_BIOMARKER_CONFIG": str(config_path)}), self.assertRaises(ValueError):
-                load_biomarker_service()
-        config_path.write_text(json.dumps(original))
-        for update in ({"url": "http://fhir.invalid"}, {"is_secure": False}, {"token": ""}, {"url": "https://fhir.invalid/?token=secret"}):
+    def load_config(self):
+        with patch.dict(os.environ, {"MAYA_BIOMARKER_CONFIG": str(Path(self.folder.name) / "biomarkers.json")}):
+            return load_biomarker_service()
+
+    def test_resource_types_and_codes_are_configurable_without_sdk_catalogue(self):
+        path = Path(self.folder.name) / "biomarkers.json"
+        settings = json.loads(path.read_text())
+        settings["fhir"]["resource_types"]["blood_pressure"] = "partner-configured-type"
+        settings["fhir"]["observation_codes"]["blood_pressure"] = [{"system": "partner-system", "code": "partner-code"}]
+        path.write_text(json.dumps(settings))
+        with patch(CLIENT):
+            service = self.load_config()
+        service.provider.client.get.return_value = records(observation(code={"coding": [{"system": "partner-system", "code": "partner-code"}]}))
+        self.assertEqual(service.fetch("participant-001", request("blood_pressure"), [])[0]["status"], "ok")
+        service.provider.client.get.assert_called_once_with("partner-configured-type", subject="synthetic-patient")
+        for update in ({"observation_codes": {}}, {"resource_types": {}}, {"timeout_seconds": 10}):
+            path.write_text(json.dumps({**settings, "fhir": {**settings["fhir"], **update}}))
+            with self.assertRaises(ValueError):
+                self.load_config()
+
+    def test_inline_token_and_relative_token_file_constructor(self):
+        credential = Path(self.folder.name) / "client.json"
+        with patch(CLIENT) as client:
+            self.load_config()
+            self.assertEqual(client.call_args.kwargs, {"url": "https://fhir.invalid/proxy/", "token": "synthetic-secret", "is_secure": True})
+        token_path = credential.parent / "token.txt"
+        token_path.write_text("synthetic-file-token\n")
+        for inline in ({}, {"token": None}, {"token": "synthetic-fallback"}):
+            credential.write_text(json.dumps({"url": "https://fhir.invalid", "token_file": "token.txt", **inline}))
+            with patch(CLIENT) as client:
+                self.load_config()
+                self.assertEqual(client.call_args.kwargs["token_file"], str(token_path.resolve()))
+                self.assertIs(client.call_args.kwargs["is_secure"], True)
+                self.assertIn("token", client.call_args.kwargs)
+        token_path.unlink()
+        with self.assertRaises(OSError):
+            self.load_config()
+        token_path.write_text("\n")
+        with self.assertRaises(ValueError):
+            self.load_config()
+
+    def test_insecure_credentials_and_older_sdk_fail_at_configuration(self):
+        for update in ({"url": "http://fhir.invalid"}, {"is_secure": False}, {"token": ""},
+                       {"url": "https://user:pass@fhir.invalid"}, {"url": "https://fhir.invalid/?token=secret"}):
             credentials = {"url": "https://fhir.invalid", "token": "synthetic-secret", **update}
             (Path(self.folder.name) / "client.json").write_text(json.dumps(credentials))
-            with patch.dict(os.environ, {"MAYA_BIOMARKER_CONFIG": str(config_path)}), self.assertRaises(ValueError):
-                load_biomarker_service()
+            with self.assertRaises(ValueError):
+                self.load_config()
+        with patch("maya.framework.integrations.biomarkers.fhir.version", return_value="25.5.14"), self.assertRaisesRegex(ValueError, "26.10.16"):
+            self.load_config()
+
+
+@unittest.skipUnless(importlib.util.find_spec("libfhir"), "Requires the UCLM libfhir wheel.")
+class InstalledSDKLimitationsTests(unittest.TestCase):
+    """Exercise the installed public client against an in-memory HTTP boundary."""
+
+    def setUp(self):
+        from importlib.metadata import version
+        from libfhir.client import FHIRProxyClient
+        self.assertEqual(version("libfhir"), "26.10.16")
+        self.client = FHIRProxyClient(url="https://fhir.invalid", token="synthetic-secret", is_secure=True)
+
+    def get(self, payloads):
+        with patch("requests.Session.get", return_value=response(payloads)) as transport:
+            result = self.client.get("blood-pressure", subject="synthetic-patient")
+        self.assertIs(transport.call_args.kwargs["verify"], True)
+        self.assertNotIn("timeout", transport.call_args.kwargs)
+        return result
+
+    def test_scalar_units_are_lost_but_components_survive(self):
+        scalar = observation("body-weight", valueQuantity={"value": 70, "unit": "kg", "system": "http://unitsofmeasure.org", "code": "kg"})
+        scalar.pop("component")
+        dumped = self.get([scalar])[0].dump()
+        self.assertEqual(dumped["valueQuantity"], {"value": 70.0})
+        self.assertEqual(self.get([observation()])[0].dump()["component"], observation()["component"])
+
+    def test_actual_sdk_serialization_reaches_adapter_unit_guard(self):
+        scalar = observation("body-weight", valueQuantity={"value": 70, "unit": "kg"})
+        scalar.pop("component")
+        with TemporaryDirectory() as folder:
+            service = configured_service(folder)
+            service.provider.client = self.client
+            for payload, measurement, expected in ((scalar, "body_weight", "unavailable"),
+                                                     (observation(), "blood_pressure", "ok")):
+                with patch("requests.Session.get", return_value=response([payload])):
+                    result = service.fetch("participant-001", request(measurement), [])[0]
+                self.assertEqual(result["status"], expected)
+
+    def test_documented_token_file_is_used_by_real_client(self):
+        from libfhir.client import FHIRProxyClient
+        with TemporaryDirectory() as folder:
+            token_path = Path(folder) / "token.txt"
+            token_path.write_text("synthetic-file-token\n")
+            client = FHIRProxyClient(url="https://fhir.invalid", token=None,
+                                     token_file=str(token_path), is_secure=True)
+            with patch("requests.Session.get", return_value=response()) as transport:
+                client.get("blood-pressure", subject="synthetic-patient")
+            self.assertEqual(transport.call_args.kwargs["json"]["token"], "synthetic-file-token")
+
+    def test_failure_empty_and_rejected_records_have_ambiguous_outcomes(self):
+        from requests.exceptions import Timeout
+        self.assertEqual(self.get([]), [])
+        with patch("requests.Session.get", side_effect=Timeout("synthetic timeout")):
+            self.assertEqual(self.client.get("blood-pressure", subject="synthetic-patient"), [])
+        with patch("requests.Session.get", return_value=response(body={"status": "error"})):
+            self.assertEqual(self.client.get("blood-pressure", subject="synthetic-patient"), [])
+        with patch("requests.Session.get", return_value=response(status=403)):
+            self.assertIsNone(self.client.get("blood-pressure", subject="synthetic-patient"))
+
+    def test_timestamp_offsets_fractions_and_absence_only_are_omitted(self):
+        for timestamp in ("2026-10-18T10:30:00.125Z", "2026-10-18T10:30:00+00:00"):
+            self.assertEqual(self.get([observation(effectiveDateTime=timestamp)]), [])
+            self.assertEqual(len(self.get([observation(), observation(id="newer", effectiveDateTime=timestamp)])), 1)
+        absent = observation(dataAbsentReason={"text": "Not measured"})
+        absent.pop("component")
+        self.assertEqual(self.get([absent]), [])
 
 
 if __name__ == "__main__":

@@ -114,27 +114,26 @@ class ToolCheckTests(unittest.TestCase):
         self.assertEqual(report["checks"]["biomarkers"]["status"], "configured")
 
     @unittest.skipUnless(importlib.util.find_spec("libfhir"), "Requires UCLM libfhir.")
-    def test_fhir_mapping_real_read_and_http_error_are_distinct(self):
-        from maya.tests.test_fhir_biomarkers import configured_service as fhir_service, observation, response
+    def test_fhir_mapping_public_read_and_ambiguous_failure_are_distinct(self):
+        from maya.tests.test_fhir_biomarkers import configured_service as fhir_service, observation, records
 
         service = fhir_service(self.folder)
-        self.addCleanup(service.provider.client._session.close)
         self.enterContext(patch.dict(os.environ, {"MAYA_BIOMARKER_CONFIG": str(self.folder / "biomarkers.json")}))
         self.enterContext(patch("maya.framework.integrations.biomarkers.load_biomarker_service", return_value=service))
-        with patch.object(service.provider.client._session, "get", return_value=response([observation()])) as get:
+        with patch.object(service.provider.client, "get", return_value=records(observation())) as get:
             code, report = self.run_check("--only", "biomarkers")
             self.assertEqual(report["checks"]["biomarkers"]["status"], "configured")
             get.assert_not_called()
-            get.side_effect = lambda *args, **kwargs: response([observation()] if kwargs["json"]["resource_type"] == "blood-pressure" else [])
+            get.side_effect = lambda resource_type, **kwargs: records(observation(resource_type))
             code, report = self.run_check("--only", "biomarkers", "--fetch")
             self.assertEqual(code, 0)
-            self.assertEqual(report["checks"]["biomarkers"]["observation_count"], 1)
+            self.assertEqual(report["checks"]["biomarkers"]["observation_count"], 3)
             self.assertNotIn("134", json.dumps(report))
             get.side_effect = None
-            get.return_value = response(status=403)
+            get.return_value = []
             code, report = self.run_check("--only", "biomarkers", "--fetch")
             self.assertEqual(code, 1)
-            self.assertEqual(report["checks"]["biomarkers"]["http_status"], 403)
+            self.assertEqual(report["checks"]["biomarkers"]["error_type"], "ValueError")
             get.reset_mock()
             service.config.patient_map.clear()
             code, report = self.run_check("--only", "biomarkers", "--fetch")

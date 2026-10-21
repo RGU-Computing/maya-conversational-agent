@@ -14,6 +14,7 @@ from typing import Optional, Any
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
+import webrtcvad
 from dotenv import load_dotenv
 from maya.framework.conversation.personalization import SessionConfig
 from maya.framework.integrations.speech import init_asr, init_tts, transcribe
@@ -103,13 +104,18 @@ class VoiceConfig:
     silence_seconds: float = float(os.getenv("MAYA_VOICE_SILENCE_SECONDS", "1.5"))
     silence_threshold: float = float(os.getenv("MAYA_VOICE_SILENCE_THRESHOLD", "0.015"))
     min_seconds: float = float(os.getenv("MAYA_VOICE_MIN_SECONDS", "0.6"))
+    min_speech_seconds: float = float(os.getenv("MAYA_VOICE_MIN_SPEECH_SECONDS", "0.2"))
+    vad_mode: int = int(os.getenv("MAYA_VOICE_VAD_MODE", "2"))
     poll_seconds: float = float(os.getenv("MAYA_VOICE_POLL_SECONDS", "0.1"))
     error_text: str = os.getenv("MAYA_VOICE_ERROR_TEXT", "Voice input is temporarily unavailable. Please tap to try again.")
     mic_device: Optional[int] = None  # MAYA_MIC_DEVICE=int index
 
     def __post_init__(self):
-        if any(not isfinite(value) or value <= 0 for value in (self.max_seconds, self.poll_seconds)):
+        if any(not isfinite(value) or value <= 0 for value in (
+                self.max_seconds, self.poll_seconds, self.min_speech_seconds)):
             raise ValueError("Voice duration and polling interval must be finite and positive.")
+        if self.rate not in (8000, 16000, 32000, 48000) or self.vad_mode not in range(4):
+            raise ValueError("Voice capture requires a supported WebRTC sample rate and VAD mode (0–3).")
 
 
 def _mic_device_from_env() -> Optional[int]:
@@ -278,6 +284,11 @@ class PhyxioService:
         max_level = 0.0
         speech_seen = False
         last_eff = v.silence_threshold
+        vad = webrtcvad.Vad(v.vad_mode)
+        # WebRTC accepts fixed 10/20/30 ms frames, independently of callback size.
+        vad_frames = v.rate // 50
+        pending = np.empty(0, dtype=np.float32)
+        speech_frames = 0
 
         def cb(indata: np.ndarray, _frames: int, _time, status) -> None:
             if status:
@@ -302,32 +313,41 @@ class PhyxioService:
 
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    if not blocks:
+                        raise OSError("Microphone stopped delivering audio.")
                     break
                 try:
                     block = audio_q.get(timeout=min(v.poll_seconds, remaining))
                 except queue.Empty:
                     if self._cancel_recording.is_set() or self._tts_running.is_set():
                         break
-                    if not stream.active or time.monotonic() >= deadline:
+                    if not stream.active:
                         raise OSError("Microphone stopped delivering audio.")
+                    if time.monotonic() >= deadline:
+                        if not blocks:
+                            raise OSError("Microphone stopped delivering audio.")
+                        break
                     continue
                 blocks.append(block)
                 total_frames += len(block)
 
-                level = float(np.sqrt(np.mean(np.square(block))) + 1e-12)
-                max_level = max(max_level, level)
-
-                if level < v.silence_threshold * 4:
-                    noise_floor = 0.9 * noise_floor + 0.1 * level
-
-                eff = max(v.silence_threshold, noise_floor * 3.0, max_level * 0.05)
-                last_eff = eff
-
-                if level >= eff:
-                    speech_seen = True
-                    silence_run = 0
-                else:
-                    silence_run = silence_run + len(block) if speech_seen else 0
+                pending = np.concatenate((pending, block.reshape(-1)))
+                while len(pending) >= vad_frames:
+                    frame, pending = pending[:vad_frames], pending[vad_frames:]
+                    level = float(np.sqrt(np.mean(np.square(frame))) + 1e-12)
+                    max_level = max(max_level, level)
+                    if level < v.silence_threshold * 4:
+                        noise_floor = 0.9 * noise_floor + 0.1 * level
+                    eff = max(v.silence_threshold, noise_floor * 3.0, max_level * 0.05)
+                    last_eff = eff
+                    pcm = (np.clip(frame, -1, 1) * 32767).astype('<i2').tobytes()
+                    voiced = vad.is_speech(pcm, v.rate)
+                    if voiced and level >= eff:
+                        speech_frames += vad_frames
+                        speech_seen = speech_frames / v.rate >= v.min_speech_seconds
+                        silence_run = 0
+                    elif speech_seen:
+                        silence_run += vad_frames
 
                 if total_frames >= max_frames:
                     break
@@ -348,6 +368,7 @@ class PhyxioService:
             "peak": peak,
             "rms": rms,
             "speech_seen": speech_seen,
+            "speech_seconds": speech_frames / v.rate,
             "noise_floor": float(noise_floor),
             "max_level": float(max_level),
             "last_effective_threshold": float(last_eff),

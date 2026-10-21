@@ -11,5 +11,6 @@
   "privacy_notice_label": "Pilot privacy notice",
   "privacy_notice_url": null,
   "clarification_unavailable_text": "I'm having trouble checking the information needed to answer safely. Please try again. For advice about your own treatment or medicines, contact your care team or pharmacist; for urgent symptoms, seek urgent medical help.",
+  "request_unavailable_text": "I couldn't process that message. Please ask your question again.",
   "health_output_instruction": "Write only the answer. The application separately displays the retrieved references and adds a health disclaimer. Do not generate a reference list, links, citation markers or a generic disclaimer. Still include any specific uncertainty, limitations of the retrieved evidence and safety guidance needed to answer the question."
 }

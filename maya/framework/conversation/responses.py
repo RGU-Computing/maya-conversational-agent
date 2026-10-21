@@ -24,6 +24,7 @@ class ResponsePolicy(BaseModel):
     privacy_notice_label: str
     privacy_notice_url: HttpUrl | None
     clarification_unavailable_text: str
+    request_unavailable_text: str
     health_output_instruction: str
     health_processing_status: str
     health_processing_delay_seconds: float = Field(ge=0, allow_inf_nan=False)

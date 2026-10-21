@@ -57,6 +57,9 @@ interactions.txt
 *.env
 !.env.example
 /maya/session.json
+# UCLM credentials are supplied separately from identifier/settings profiles.
+client-rgu.json
+/deployment/mirror/token.txt
 
 # ---- UV / lockfiles (keep uv.lock if you want reproducible envs) ----
 # uv.lock

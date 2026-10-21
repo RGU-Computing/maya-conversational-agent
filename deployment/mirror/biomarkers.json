@@ -1,0 +1,39 @@
+{
+  "provider": "fhir",
+  "catalog": {
+    "blood_pressure": "Blood pressure, including systolic and diastolic components when recorded.",
+    "heart_rate": "Heart rate, with the recorded measurement context.",
+    "body_weight": "Body weight."
+  },
+  "patient_map": {
+    "participant-001": "pedram-rgu"
+  },
+  "fhir": {
+    "client_config_path": "client-rgu.json",
+    "resource_types": {
+      "blood_pressure": "blood-pressure",
+      "heart_rate": "heart-rate",
+      "body_weight": "body-weight"
+    },
+    "observation_codes": {
+      "blood_pressure": [
+        {
+          "system": "http://loinc.org",
+          "code": "85354-9"
+        }
+      ],
+      "heart_rate": [
+        {
+          "system": "http://loinc.org",
+          "code": "8867-4"
+        }
+      ],
+      "body_weight": [
+        {
+          "system": "http://loinc.org",
+          "code": "29463-7"
+        }
+      ]
+    }
+  }
+}

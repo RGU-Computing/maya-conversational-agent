@@ -1,0 +1,8 @@
+{
+  "user_id": "participant-001",
+  "preferences": {
+    "personality_id": "supportive",
+    "tts_voice": "en-GB-AdaMultilingualNeural",
+    "asr_language": "auto"
+  }
+}

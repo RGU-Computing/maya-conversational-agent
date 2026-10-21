@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from langchain_core.tools import tool
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class BiomarkerRequest(BaseModel):
@@ -31,11 +31,25 @@ class Observation(BaseModel):
     reference_range: dict | None = None
 
 
+class FHIRCode(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    system: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+
+
 class FHIRConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     client_config_path: str
     resource_types: dict[str, str]
-    timeout_seconds: float = Field(gt=0)
+    observation_codes: dict[str, list[FHIRCode]]
+
+    @model_validator(mode="after")
+    def validate_measurements(self):
+        if (set(self.observation_codes) != set(self.resource_types)
+                or any(not value.strip() for value in self.resource_types.values())
+                or any(not codes for codes in self.observation_codes.values())):
+            raise ValueError("FHIR resource types require matching, nonempty observation codes.")
+        return self
 
 
 class BiomarkerConfig(BaseModel):
