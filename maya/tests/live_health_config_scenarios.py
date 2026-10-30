@@ -93,10 +93,11 @@ def run(selected=(), *, service=None):
         drain()
         return entry
 
-    def ask(question, user='health-config', *, target=None, mapped=True):
+    def ask(question, user='health-config', *, target=None, mapped=True, response_language=None):
         if mapped:
             service.config.patient_map[user] = 'synthetic-patient'
-        config = SessionConfig(user_id=user).graph_config()
+        preferences = {'response_language': response_language} if response_language else {}
+        config = SessionConfig(user_id=user, preferences=preferences).graph_config()
         return config, turn(target or graph, config, {'messages': [HumanMessage(content=question)]})
 
     def answered(entry):
@@ -225,7 +226,7 @@ def run(selected=(), *, service=None):
             }, first=first, resumed=response)
 
         if enabled('spanish'):
-            _, result = ask('¿Qué es la cardiotoxicidad, en general?', 'health-config-spanish')
+            _, result = ask('¿Qué es la cardiotoxicidad, en general?', 'health-config-spanish', response_language='es')
             save('spanish', {'answers_with_evidence': answered(result), 'no_lookup': result['lookup_calls'] == 0,
                              'spanish_response': 'cardiotoxicidad' in result['answer'].lower()}, result=result)
 

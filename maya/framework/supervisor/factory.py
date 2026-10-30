@@ -3,13 +3,12 @@ import json
 import hashlib
 import re
 from datetime import datetime
-from trustcall import create_extractor
 from typing import Optional, Literal, List, Dict, Any, Tuple
 from pydantic import BaseModel, Field
 import importlib
 
 from langchain_core.runnables import RunnableConfig
-from langchain_core.messages import merge_message_runs, HumanMessage, SystemMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
 
 from langgraph.graph import StateGraph, END, START
 from langgraph.store.base import BaseStore
@@ -22,13 +21,14 @@ from maya.framework.memory.ontology import OntologyMemoryService, OntologyMemory
 from maya.framework.integrations.models import get_chat_model
 from maya.framework.conversation.personalization import preferences_from_config
 from maya.framework.conversation.history import recent_dialogue
-from maya.framework.conversation.responses import health_presentation, load_response_policy
+from maya.framework.conversation.responses import health_presentation, localize_messages, localize_text, response_policy
 from maya.framework.ontology import get_ontology_registry
 from maya.framework.supervisor.state import SupervisorState
 from dotenv import load_dotenv
 from .prompts import (
-    TRUSTCALL_INSTRUCTION,
+    PROFILE_UPDATE_INSTRUCTION,
     MEMORY_UPDATE_INSTRUCTION,
+    MEMORY_VERIFICATION_INSTRUCTION,
     SUPERVISOR_SYSTEM_MESSAGE,
     build_health_route_guard_prompt,
     system,
@@ -64,6 +64,10 @@ def _load_agents() -> Tuple[List[Any], Dict[str, str]]:
 class SupervisorRouteDecision(BaseModel):
     """Validated supervisor route decision for the current turn."""
 
+    reason: str = Field(default="", description=(
+        "Identify the user's actual request or assertion and the applicable routing rule before choosing a route. "
+        "Distinguish recall, profile/experience updates, clinical fact-only updates, recorded-value readout and health advice."
+    ))
     question_subject: Literal["current_user", "other", "general", "unknown"] = Field(
         default="unknown",
         description=("Whose health or measurements the question concerns: current_user for the signed-in user, "
@@ -80,20 +84,13 @@ class SupervisorRouteDecision(BaseModel):
         "phyxio_exercise_agent",
     ] = Field(
         description=(
-            "Choose exactly one route. direct_answer also covers messages that only assert a personal fact "
+            "Choose exactly one route. direct_answer also covers messages that only assert a clinical fact "
             "supported by a selected writable ontology binding; the memory finalizer stores it."
         )
     )
     biomarker_request: BiomarkerRequest | None = None
     selected_ontology_models: list[str] = Field(
         description="Every relevant model_id from the supplied ontology catalog; use an empty list when none apply."
-    )
-    fact_only_ontology_update: bool = Field(
-        default=False,
-        description=(
-            "True only when the message solely asserts personal facts represented by writable bindings "
-            "in selected_ontology_models and asks no question or action."
-        ),
     )
 
 
@@ -108,15 +105,23 @@ class HealthRouteGuardDecision(BaseModel):
     )
 
 class Memory(BaseModel):
-    content: str = Field(description="The main content of the memory. For example: User expressed interest in learning about French.")
+    content: str = Field(
+        description="A new or corrected personal fact explicitly asserted by the current user; preserve its meaning and uncertainty."
+    )
+    memory_id: str | None = Field(
+        default=None,
+        description="Existing memory ID to correct, or null for a new memory. Never invent an existing ID.",
+    )
 
-# Create the extractor
-memory_extractor = create_extractor(
-    model,
-    tools=[Memory],
-    tool_choice="Memory",
-    enable_inserts=True,
-)
+
+class MemoryUpdate(BaseModel):
+    memories: list[Memory] = Field(
+        default_factory=list,
+        description="Only new or corrected user facts; empty for recall, questions, speculation or requests not to save.",
+    )
+
+
+memory_extractor = model.with_structured_output(MemoryUpdate, strict=True)
 
 class Profile(BaseModel):
     """This is the profile of the user you are chatting with"""
@@ -133,12 +138,21 @@ class Profile(BaseModel):
     )
 
 
-# Create the Trustcall extractor for updating the user profile 
-profile_extractor = create_extractor(
-    model,
-    tools=[Profile],
-    tool_choice="Profile",
-)
+class ProfileUpdate(BaseModel):
+    profile: Profile | None = Field(
+        default=None,
+        description="Complete updated profile, preserving existing facts; null when no new user assertion supports a change.",
+    )
+
+
+profile_extractor = model.with_structured_output(ProfileUpdate, strict=True)
+
+
+class MemoryVerification(BaseModel):
+    reason: str = Field(default="", description="Brief explanation of which user assertions support the proposed changes, or why they must be rejected.")
+    supported: bool = Field(
+        description="True only when the latest user message explicitly supports the entire proposed change."
+    )
 
 
 
@@ -150,10 +164,11 @@ def build_supervisor(*, biomarker_service=None):
             return ontology_registry.render_context(agent_id, model_ids), ""
         return ontology_memory.load_context(user_id=user_id, agent_id=agent_id, model_ids=model_ids)
 
-    def memory_unavailable(selected_models):
+    def memory_unavailable(selected_models, config):
         return {
             "messages": [AIMessage(
-                content=ontology_registry.runtime["memory_policy"]["recovery_unavailable_text"],
+                content=localize_text(ontology_registry.runtime["memory_policy"]["recovery_unavailable_text"],
+                                      preferences_from_config(config).response_language),
                 additional_kwargs={"source": "ontology_memory", "memory_status": "pending",
                                    "selected_ontology_models": selected_models},
             )],
@@ -231,7 +246,7 @@ def build_supervisor(*, biomarker_service=None):
         namespace = ("memory", user_id)
         memories = store.search(namespace)
         if memories:
-            general_memory = "\n".join(json.dumps(mem.value) for mem in memories)
+            general_memory = "\n".join(json.dumps(mem.value, ensure_ascii=False) for mem in memories)
         else:
             general_memory = "No general memories."
 
@@ -239,6 +254,7 @@ def build_supervisor(*, biomarker_service=None):
             [
                 SUPERVISOR_SYSTEM_MESSAGE.format(
                     user_profile=user_profile,
+                    profile_schema=json.dumps(Profile.model_json_schema()),
                     general_memory=general_memory,
                     time=datetime.now().isoformat(),
                 ),
@@ -252,18 +268,8 @@ def build_supervisor(*, biomarker_service=None):
         routing_messages = [SystemMessage(content=system_msg), *dialogue]
 
         decision = model.with_structured_output(SupervisorRouteDecision, strict=True).invoke(
-            routing_messages
+            routing_messages, config=config
         )
-
-        initially_selected = ontology_registry.resolve_model_ids(
-            decision.selected_ontology_models
-        )
-        if (
-            isinstance(decision, SupervisorRouteDecision)
-            and decision.fact_only_ontology_update
-            and ontology_registry.has_active_bindings(initially_selected)
-        ):
-            decision = decision.model_copy(update={"route_type": "direct_answer"})
 
         if (
             isinstance(decision, SupervisorRouteDecision)
@@ -272,7 +278,8 @@ def build_supervisor(*, biomarker_service=None):
         ):
             health_guard = model.with_structured_output(HealthRouteGuardDecision, strict=True).invoke(
                 [
-                    SystemMessage(content=build_health_route_guard_prompt()),
+                    SystemMessage(content=build_health_route_guard_prompt(
+                        ontology_registry.catalog_for_agent("supervisor"))),
                     *dialogue,
                 ]
             )
@@ -293,7 +300,7 @@ def build_supervisor(*, biomarker_service=None):
         try:
             ontology_context, _ = clinical_context(user_id, agent_id, selected_models, decision.question_subject)
         except OntologyMemoryNotReady:
-            return memory_unavailable(selected_models)
+            return memory_unavailable(selected_models, config)
         resolved_user_input = latest_user.content.strip() if latest_user is not None else ""
         turn_update = {
             "route_type": route_type,
@@ -313,90 +320,99 @@ def build_supervisor(*, biomarker_service=None):
             SystemMessage(
                 content=system(agent_descriptions=agent_descriptions).format(
                     memory=general_memory,
-                    profile=user_profile,
+                    profile=json.dumps(user_profile, ensure_ascii=False) if user_profile else "No saved profile.",
                     personal_instructions=ontology_context,
                 )
                 + preferences_from_config(config).response_style()
             )
         ]
         answer_messages.extend(dialogue)
-        response = model.invoke(answer_messages)
+        response = model.invoke(answer_messages, config=config)
         return {"messages": [response], **turn_update}
 
     def update_memory(state: SupervisorState, config: RunnableConfig, store: BaseStore):
-
-        """Reflect on the chat history and update the memory collection."""
-        
-        # Get the user ID from the config
-        user_id = config["configurable"]["user_id"]
-
-        # Define the namespace for the memories
-        namespace = ("memory", user_id)
-
-        # Retrieve the most recent memories for context
-        existing_items = store.search(namespace)
-
-        # Format the existing memories for the Trustcall extractor
-        tool_name = "Memory"
-        existing_memories = ([(existing_item.key, tool_name, existing_item.value)
-                            for existing_item in existing_items]
-                            if existing_items
-                            else None
-                            )
-
-        # Merge the chat history and the instruction
-        MEMORY_UPDATE_INSTRUCTION_FORMATTED=MEMORY_UPDATE_INSTRUCTION.format(time=datetime.now().isoformat())
-        updated_messages=list(merge_message_runs(messages=[SystemMessage(content=MEMORY_UPDATE_INSTRUCTION_FORMATTED)] + state["messages"]))
-
-        # Invoke the extractor
-        result = memory_extractor.invoke({"messages": updated_messages, 
-                                            "existing": existing_memories})
-
-        # Save the memories from Trustcall to the store
-        for r, rmeta in zip(result["responses"], result["response_metadata"]):
-            store.put(namespace,
-                    rmeta.get("json_doc_id", str(uuid.uuid4())),
-                    r.model_dump(mode="json"),
-                )
-        return {"messages": [AIMessage(content="I'll remember that.")]}
+        """Save supported assertions from this turn, then answer using the actual result."""
+        namespace = ("memory", config["configurable"]["user_id"])
+        existing = {item.key: item.value for item in store.search(namespace)}
+        latest_user = _latest_user_message(state["messages"])
+        source_text = str(latest_user.content) if latest_user is not None else ""
+        saved = []
+        if source_text.strip():
+            result = memory_extractor.invoke([
+                SystemMessage(content=MEMORY_UPDATE_INSTRUCTION.format(time=datetime.now().isoformat())),
+                HumanMessage(content=json.dumps({"latest_user_message": source_text, "existing_memories": existing}, ensure_ascii=False)),
+            ], config=config)
+            approved = []
+            for memory in result.memories:
+                if not memory.content.strip() or (memory.memory_id is not None and memory.memory_id not in existing):
+                    continue
+                verification = model.with_structured_output(MemoryVerification, strict=True).invoke([
+                    SystemMessage(content=MEMORY_VERIFICATION_INSTRUCTION),
+                    HumanMessage(content=json.dumps({"latest_user_message": source_text,
+                                                    "existing_records": existing,
+                                                    "proposed_update": memory.model_dump()}, ensure_ascii=False)),
+                ], config=config)
+                if verification.supported:
+                    approved.append(memory)
+            for memory in approved:
+                if any(item.get("content") == memory.content for item in existing.values()):
+                    continue
+                key = memory.memory_id or str(uuid.uuid4())
+                record = {"content": memory.content, "source_message_id": latest_user.id, "source_text": source_text}
+                store.put(namespace, key, record)
+                existing[key] = record
+                saved.append(record)
+        response = model.invoke([
+            SystemMessage(content="Answer the user's latest message using only their stored memories below. "
+                          "Acknowledge only the facts listed in saved_this_turn as saved. If that list is empty, "
+                          "do not claim you saved anything. For recall, answer from stored_memories; if absent, say you do not know."
+                          + preferences_from_config(config).response_style()),
+            HumanMessage(content=json.dumps({"latest_user_message": source_text, "stored_memories": list(existing.values()),
+                                            "saved_this_turn": saved}, ensure_ascii=False)),
+        ], config=config)
+        return {"messages": [response]}
 
 
     def update_profile(state: SupervisorState, config: RunnableConfig, store: BaseStore):
-
-        """Reflect on the chat history and update the memory collection."""
-        
-        # Get the user ID from the config
-        user_id = config["configurable"]["user_id"]
-
-        # Define the namespace for the memories
-        namespace = ("profile", user_id)
-
-        # Retrieve the most recent memories for context
-        existing_items = store.search(namespace)
-
-        # Format the existing memories for the Trustcall extractor
-        tool_name = "Profile"
-        existing_memories = ([(existing_item.key, tool_name, existing_item.value)
-                            for existing_item in existing_items]
-                            if existing_items
-                            else None
-                            )
-
-        # Merge the chat history and the instruction
-        TRUSTCALL_INSTRUCTION_FORMATTED=TRUSTCALL_INSTRUCTION.format(time=datetime.now().isoformat())
-        updated_messages=list(merge_message_runs(messages=[SystemMessage(content=TRUSTCALL_INSTRUCTION_FORMATTED)] + state["messages"]))
-
-        # Invoke the extractor
-        result = profile_extractor.invoke({"messages": updated_messages, 
-                                            "existing": existing_memories})
-
-        # Save the memories from Trustcall to the store
-        for r, rmeta in zip(result["responses"], result["response_metadata"]):
-            store.put(namespace,
-                    rmeta.get("json_doc_id", str(uuid.uuid4())),
-                    r.model_dump(mode="json"),
-                )
-        return {"messages": [AIMessage(content="Thanks, I'll remember that.")]}
+        """Update this user's profile only from explicit assertions in the latest message."""
+        namespace = ("profile", config["configurable"]["user_id"])
+        existing = store.search(namespace)
+        profile = existing[0].value if existing else None
+        latest_user = _latest_user_message(state["messages"])
+        source_text = str(latest_user.content) if latest_user is not None else ""
+        saved = False
+        if source_text.strip():
+            result = profile_extractor.invoke([
+                SystemMessage(content=PROFILE_UPDATE_INSTRUCTION.format(time=datetime.now().isoformat())),
+                HumanMessage(content=json.dumps({"latest_user_message": source_text, "existing_profile": profile}, ensure_ascii=False)),
+            ], config=config)
+            if result.profile is not None:
+                updated = result.profile.model_dump(mode="json")
+                previous = profile or {}
+                # Verify factual changes, not the full schema's unknown defaults.
+                # Clearing an existing value is a change and still needs evidence.
+                changes = {key: value for key, value in updated.items()
+                           if value != previous.get(key)
+                           and (value not in (None, []) or previous.get(key) not in (None, []))}
+                if changes:
+                    verification = model.with_structured_output(MemoryVerification, strict=True).invoke([
+                        SystemMessage(content=MEMORY_VERIFICATION_INSTRUCTION),
+                        HumanMessage(content=json.dumps({"latest_user_message": source_text,
+                                                        "existing_records": profile,
+                                                        "proposed_update": changes}, ensure_ascii=False)),
+                    ], config=config)
+                    if verification.supported:
+                        store.put(namespace, existing[0].key if existing else "profile", updated)
+                        profile, saved = updated, True
+        response = model.invoke([
+            SystemMessage(content="Answer the user's latest message from their stored profile below. "
+                          "Confirm an update only when saved_this_turn is true. Otherwise do not claim to save anything. "
+                          "For recall, answer from stored_profile; if absent, say you do not know."
+                          + preferences_from_config(config).response_style()),
+            HumanMessage(content=json.dumps({"latest_user_message": source_text, "stored_profile": profile,
+                                            "saved_this_turn": saved}, ensure_ascii=False)),
+        ], config=config)
+        return {"messages": [response]}
 
     def biomarker_readout(state: SupervisorState, config: RunnableConfig):
         results = state.get("biomarker_results") or []
@@ -408,7 +424,7 @@ def build_supervisor(*, biomarker_service=None):
                                             "lookup_results": results})),
         ], config=config)
         return {"messages": [AIMessage(
-            content=biomarkers.label_answer(response.content, results),
+            content=biomarkers.label_answer(response.content, results, preferences_from_config(config).response_language),
             additional_kwargs={"source": "biomarkers", "biomarker_results": results},
         )]}
 
@@ -427,6 +443,7 @@ def build_supervisor(*, biomarker_service=None):
             )
         decision = assess()
         if (subject == "current_user" and decision.biomarker_request and decision.biomarker_request.subject == "current_user"
+                and decision.biomarker_request.catalog_match == "matched"
                 and decision.biomarker_request.measurement_ids and not decision.urgent_safety_bypass):
             results = biomarkers.fetch(user_id, decision.biomarker_request, results)
             decision = assess(allow_lookup=False)
@@ -453,14 +470,14 @@ def build_supervisor(*, biomarker_service=None):
             *,
             resolved_input: str = "",
         ) -> dict[str, Any]:
-            text = (text or "").strip() or agent.config.messages.empty_response
-            text = biomarkers.label_answer(text, biomarker_results)
+            text = (text or "").strip() or health_messages.empty_response
+            text = biomarkers.label_answer(text, biomarker_results, preferences.response_language)
             extra = {"source": "health_rag", "biomarker_results": biomarker_results}
             if clarification_trace:
                 extra["clarification"] = clarification_trace
             if trace:
                 extra["workflow_trace"] = [trace]
-                extra["presentation"] = health_presentation(text, trace.get("citations", []))
+                extra["presentation"] = health_presentation(text, trace.get("citations", []), preferences.response_language)
             update: dict[str, Any] = {
                 "messages": [AIMessage(content=text, additional_kwargs=extra)],
                 "selected_ontology_models": selected_models,
@@ -477,14 +494,18 @@ def build_supervisor(*, biomarker_service=None):
             question = "Please answer the user's latest health question."
         health_context = _recent_health_context(messages)
         preferences = preferences_from_config(config)
+        # Prepare error wording before assessment so its failure needs no further model call.
+        policy = response_policy(preferences.response_language)
         user_id = config["configurable"]["user_id"]
         try:
             ontology_context, ontology_memory_context = clinical_context(user_id, "health_rag", selected_models, subject)
         except OntologyMemoryNotReady:
-            return memory_unavailable(selected_models)
+            return memory_unavailable(selected_models, config)
         agent = agent_by_name.get("health_rag")
         if agent is None:
-            return send(load_response_policy().clarification_unavailable_text, resolved_input=question)
+            return send(policy.clarification_unavailable_text, resolved_input=question)
+
+        health_messages = localize_messages(agent.config.messages, preferences.response_language)
 
         get_stream_writer()({"event": "health_processing_started"})
         try:
@@ -497,14 +518,14 @@ def build_supervisor(*, biomarker_service=None):
         except ClarificationAssessmentError as error:
             clarification_trace.update(status="error", selected_ontology_models=selected_models,
                                        error_type=type(error.__cause__ or error).__name__)
-            return send(load_response_policy().clarification_unavailable_text)
+            return send(policy.clarification_unavailable_text)
         clarification_trace.update(
             status="assessed", selected_ontology_models=selected_models, question_subject=subject,
             **clarification_decision.model_dump(mode="json"),
         )
         if clarification_decision.needs_clarification:
             prompt = clarification_decision.clarification_question.strip()
-            clarification = interrupt(biomarkers.label_answer(prompt, biomarker_results))
+            clarification = interrupt(biomarkers.label_answer(prompt, biomarker_results, preferences.response_language))
             if isinstance(clarification, list):
                 clarification = clarification[0] if clarification else ""
             clarification_text = str(clarification or "").strip()
@@ -530,7 +551,7 @@ def build_supervisor(*, biomarker_service=None):
             value = getattr(exact_item, "value", {})
             if isinstance(value, dict) and value.get("summary"):
                 return send(
-                    f"{agent.config.messages.cached_answer_prefix} {value['summary']}",
+                    f"{health_messages.cached_answer_prefix} {value['summary']}",
                     {
                         "stage": "health_rag",
                         "tool_name": "health_rag_tool",
@@ -571,7 +592,7 @@ def build_supervisor(*, biomarker_service=None):
                 and token_overlap >= agent.config.cache.token_overlap_threshold
             ):
                 return send(
-                    f"{agent.config.messages.cached_answer_prefix} {semantic_value['summary']}",
+                    f"{health_messages.cached_answer_prefix} {semantic_value['summary']}",
                     {
                         "stage": "health_rag",
                         "tool_name": "health_rag_tool",
@@ -598,8 +619,9 @@ def build_supervisor(*, biomarker_service=None):
                 "needs_query_rewrite": clarification_trace.get("status") == "clarified",
                 "urgent_safety_bypass": clarification_decision.urgent_safety_bypass,
                 "response_style": preferences.response_style(),
+                "response_language": preferences.response_language,
             },
-            config={"recursion_limit": 10},
+            config={**config, "recursion_limit": 10},
         )
         answer_message = result["messages"][-1] if isinstance(result, dict) else None
         answer_text = getattr(answer_message, "content", "") if answer_message is not None else ""
@@ -607,7 +629,7 @@ def build_supervisor(*, biomarker_service=None):
 
         summary_text = (
             str(answer_text or "").strip()
-            or agent.config.messages.no_evidence
+            or health_messages.no_evidence
         )
         summary_stored = False
         if citations and answer_text and not biomarker_results:

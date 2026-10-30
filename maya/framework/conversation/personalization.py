@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class PersonalityPrompts(BaseModel):
@@ -24,10 +24,42 @@ PERSONALITIES = PersonalityPrompts.model_validate_json(
 ).model_dump()
 
 
+class ResponseLanguages(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, str_strip_whitespace=True)
+
+    default_response_language: str
+    languages: dict[str, str]
+    instruction_template: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_configuration(self):
+        if self.default_response_language not in self.languages or any(
+            not code or not name for code, name in self.languages.items()
+        ):
+            raise ValueError("The default response language must have a supported code and full name.")
+        if "{language}" not in self.instruction_template:
+            raise ValueError("The response-language instruction must contain {language}.")
+        try:
+            self.instruction_template.format(language=self.languages[self.default_response_language])
+        except (KeyError, IndexError, ValueError):
+            raise ValueError("Invalid response-language template; use the {language} placeholder.") from None
+        return self
+
+
+RESPONSE_LANGUAGES = ResponseLanguages.model_validate_json(
+    Path(__file__).with_name("response_languages.json").read_text(encoding="utf-8")
+)
+
+
 class Preferences(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, str_strip_whitespace=True)
 
     personality_id: Literal["default", "supportive", "concise"] = "supportive"
+    response_language: str = Field(
+        default=RESPONSE_LANGUAGES.default_response_language,
+        description="Language of generated user-facing text; independent of ASR language and TTS voice.",
+        json_schema_extra={"enum": list(RESPONSE_LANGUAGES.languages)},
+    )
     tts_voice: str = Field(
         default="en-GB-RyanNeural", min_length=1,
         description="Azure voice name available in the deployment's Speech resource.",
@@ -38,14 +70,28 @@ class Preferences(BaseModel):
         description="auto, or a Whisper-supported ISO 639-1 language code, e.g. en or es.",
     )
 
+    @field_validator("response_language")
+    @classmethod
+    def supported_response_language(cls, value: str) -> str:
+        if value not in RESPONSE_LANGUAGES.languages:
+            raise ValueError("Unsupported response_language; supported codes: "
+                             + ", ".join(RESPONSE_LANGUAGES.languages))
+        return value
+
+    def language_instruction(self) -> str:
+        return RESPONSE_LANGUAGES.instruction_template.format(
+            language=RESPONSE_LANGUAGES.languages[self.response_language]
+        )
+
     def response_style(self) -> str:
-        if not (instruction := PERSONALITIES[self.personality_id]):
-            return ""
-        return (
+        """Shared user-facing instructions, also included in the answer cache scope."""
+        instruction = PERSONALITIES[self.personality_id]
+        tone = (
             "\n\nRESPONSE STYLE (user-facing wording only)\n"
             + instruction
             + " Keep all evidence, safety guidance, required detail and tool policies unchanged."
-        )
+        ) if instruction else ""
+        return tone + "\n\n" + self.language_instruction()
 
 
 class SessionConfig(BaseModel):
@@ -93,5 +139,7 @@ def preferences_from_config(config: dict | None) -> Preferences:
 
 
 def onboarding_options() -> dict:
-    """JSON-serializable schema and personality labels for UCLM's onboarding UI."""
-    return {"schema": SessionConfig.model_json_schema(), "personalities": PERSONALITIES.copy()}
+    """JSON-serializable schema and preference options for UCLM's onboarding UI."""
+    return {"schema": SessionConfig.model_json_schema(), "personalities": PERSONALITIES.copy(),
+            "languages": RESPONSE_LANGUAGES.languages.copy(),
+            "default_response_language": RESPONSE_LANGUAGES.default_response_language}

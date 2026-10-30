@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage
 from langgraph.config import get_stream_writer
 from langgraph.graph import StateGraph, START, END, MessagesState
 
-from maya.framework.conversation.responses import load_response_policy
+from maya.framework.conversation.responses import response_policy
 from maya.framework.supervisor import run_with_vad as runner
 
 
@@ -23,9 +23,9 @@ ANSWER = ((), "updates", {"health_rag": {"messages": [AIMessage(content="Final a
 
 class RetrievalProgressTests(unittest.TestCase):
     def setUp(self):
-        self.policy = load_response_policy().model_copy(update={"health_processing_delay_seconds": 0.01})
+        self.policy = response_policy().model_copy(update={"health_processing_delay_seconds": 0.01})
         self.status = self.policy.health_processing_status
-        self.enterContext(patch.object(runner, "load_response_policy", return_value=self.policy))
+        self.enterContext(patch.object(runner, "response_policy", return_value=self.policy))
         self.acknowledged = Event()
         self.app = Mock()
         self.mirror = None
@@ -168,7 +168,7 @@ class RetrievalProgressTests(unittest.TestCase):
     def test_partner_policy_controls_status_text(self):
         policy = self.policy.model_copy(update={"health_processing_status": "Un momento, por favor."})
         self.app.stream.return_value = self.slow_stream(PROGRESS, ANSWER)
-        with patch.object(runner, "load_response_policy", return_value=policy), patch.object(runner, "speak") as speak:
+        with patch.object(runner, "response_policy", return_value=policy), patch.object(runner, "speak") as speak:
             self.run_main()
         self.assertEqual(speak.call_args_list[0].args[1], policy.health_processing_status)
 
@@ -205,7 +205,7 @@ class RetrievalProgressTests(unittest.TestCase):
 
         self.app.stream.side_effect = fail
         policy = self.policy.model_copy(update={"health_processing_delay_seconds": 30})
-        with patch.object(runner, "load_response_policy", return_value=policy), patch.object(runner, "speak") as speak:
+        with patch.object(runner, "response_policy", return_value=policy), patch.object(runner, "speak") as speak:
             started = monotonic()
             with self.assertRaisesRegex(RuntimeError, "retrieval failed"):
                 self.run_main()

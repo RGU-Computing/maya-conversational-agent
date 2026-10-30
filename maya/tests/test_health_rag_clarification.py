@@ -61,7 +61,7 @@ class HealthRagClarificationTests(unittest.TestCase):
             ontology_block="Answer clear questions; clarify only a missing referent.",
         )
 
-    def test_personality_affects_wording_stage_only(self):
+    def test_personality_and_language_affect_wording_stage_only(self):
         model = StubStructuredModel(
             DisambiguationDecision(
                 question_type="result_interpretation", needs_clarification=True,
@@ -70,10 +70,12 @@ class HealthRagClarificationTests(unittest.TestCase):
                 clarification_question="Which test result?",
             )
         )
-        style = Preferences(personality_id="supportive").response_style()
+        preferences = Preferences(personality_id="supportive", response_language="ro")
+        style = preferences.response_style()
         result = self.handle.assess_clarification("Is this result bad?", model=model, response_style=style)
         self.assertTrue(result.needs_clarification)
         self.assertNotIn("RESPONSE STYLE", model.inputs[0].to_messages()[0].content)
+        self.assertNotIn(preferences.language_instruction(), model.inputs[0].to_messages()[0].content)
         self.assertIn(style, model.inputs[1].to_messages()[0].content)
 
     def test_lookup_defers_wording_until_observations_have_been_checked(self):
@@ -82,7 +84,8 @@ class HealthRagClarificationTests(unittest.TestCase):
             question_type="result_interpretation", needs_clarification=True,
             missing_ontology_fields=["value"], material_missing_fields=["value"],
             clarification_field="value", clarification_question="What value?",
-            biomarker_request=BiomarkerRequest(subject="current_user", measurement_ids=["measure"]))
+            biomarker_request=BiomarkerRequest(subject="current_user", reason="The measurement is named.",
+                                              catalog_match="matched", measurement_ids=["measure"]))
         model = StubStructuredModel(selected)
         result = self.handle.assess_clarification("Interpret my measure", model=model)
         self.assertTrue(result.biomarker_request)
@@ -95,6 +98,20 @@ class HealthRagClarificationTests(unittest.TestCase):
         self.assertEqual(result.clarification_question, "What value?")
         self.assertEqual(model.schemas, [DisambiguationDecision, ClarificationQuestion])
         self.assertIn("Observation lookup allowed: False", model.inputs[0].to_messages()[0].content)
+
+    def test_unresolved_measurement_does_not_defer_clarification_wording(self):
+        from maya.tests.test_biomarkers import request
+        for resolution in ("ambiguous", "unsupported"):
+            selected = DisambiguationDecision(
+                question_type="result_interpretation", needs_clarification=True,
+                missing_ontology_fields=["test name"], material_missing_fields=["test name"],
+                clarification_field="test name", clarification_question="Which test result?",
+                biomarker_request=request("blood_pressure", catalog_match=resolution))
+            model = StubStructuredModel(selected)
+            result = self.handle.assess_clarification("Interpret my result", model=model)
+            self.assertTrue(result.needs_clarification)
+            self.assertTrue(result.clarification_question)
+            self.assertEqual(model.schemas, [DisambiguationDecision, ClarificationQuestion])
 
     def test_clear_question_does_not_require_clarification(self):
         model = StubStructuredModel(

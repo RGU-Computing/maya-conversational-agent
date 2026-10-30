@@ -31,7 +31,7 @@ if __package__ in {None, ""}:
 
 from maya.framework.conversation.personalization import Preferences, SessionConfig, load_session
 from maya.framework.integrations.speech import init_asr, init_tts, transcribe
-from maya.framework.conversation.responses import ResponseText, load_response_policy, response_text
+from maya.framework.conversation.responses import ResponseText, response_policy, response_text
 
 load_dotenv()
 
@@ -453,12 +453,14 @@ def build_supervisor():
 
 def main(session: SessionConfig | None = None) -> None:
     session = session or load_session()
-    load_response_policy()
     os.chdir(ROOT)
     lock_file = acquire_single_instance_lock()
     if lock_file is None:
         return
     atexit.register(lock_file.close)
+
+    # Prepare notices before accepting input; request errors must not need an LLM.
+    policy = response_policy(session.preferences.response_language)
 
     base_config = session.graph_config(thread_id=os.getenv("MAYA_RUN_THREAD_ID"))
 
@@ -505,7 +507,6 @@ def main(session: SessionConfig | None = None) -> None:
 
             def delayed_acknowledgement():
                 nonlocal progress_announced
-                policy = load_response_policy()
                 if response_ready.wait(policy.health_processing_delay_seconds):
                     return
                 progress_announced = True
@@ -538,7 +539,7 @@ def main(session: SessionConfig | None = None) -> None:
                     # Do not automatically replay a rejected/failed message. The next
                     # user request starts clean, without an unfinished tool/interrupt turn.
                     base_config = session.graph_config()
-                    text = load_response_policy().request_unavailable_text
+                    text = policy.request_unavailable_text
                     final_text, interrupts = ResponseText(text, text), []
                     print(f"[runner] model request failed ({type(err).__name__}); ready for a new request.")
                 finally:

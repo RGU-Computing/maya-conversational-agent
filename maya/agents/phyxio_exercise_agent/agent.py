@@ -62,7 +62,7 @@ class ExerciseActionDecision(BaseModel):
     )
     user_response: str = Field(
         description=(
-            "A concise response in the user's language for a safety hold, clarification, or out-of-scope request. "
+            "A concise response in the configured response language for a safety hold, clarification, or out-of-scope request. "
             "Do not claim that a tool ran."
         ),
     )
@@ -72,7 +72,7 @@ class ExerciseAgentResponse(BaseModel):
     """User-facing response grounded in the actual Phyxio tool result."""
 
     response: str = Field(
-        description="A concise, truthful response in the user's language based on the supplied tool result.",
+        description="A concise, truthful response in the configured response language based on the supplied tool result.",
     )
 
 

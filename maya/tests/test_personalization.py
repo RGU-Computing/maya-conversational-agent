@@ -17,7 +17,8 @@ import numpy as np
 from pydantic import ValidationError
 
 from maya.framework.conversation.personalization import (
-    Preferences, SessionConfig, load_session, onboarding_options,
+    Preferences, SessionConfig, load_session, onboarding_options, RESPONSE_LANGUAGES,
+    ResponseLanguages, preferences_from_config,
 )
 from maya.framework.integrations import speech
 from maya.framework.supervisor import run_with_vad as runner
@@ -112,6 +113,48 @@ class ConfigurationTests(unittest.TestCase):
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(schema["properties"]["personality_id"]["default"], "supportive")
 
+    def test_response_language_defaults_and_explicit_file_precedence(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "session.json"
+            path.write_text(json.dumps({"user_id": "language-test"}))
+            self.assertEqual(load_session(path).preferences.response_language,
+                             RESPONSE_LANGUAGES.default_response_language)
+            path.write_text(json.dumps({"user_id": "language-test", "preferences": {"response_language": "ro"}}))
+            with patch.dict(os.environ, {"MAYA_SESSION_CONFIG": str(path), "MAYA_ASR_LANGUAGE": "en"}):
+                session = load_session()
+            self.assertEqual(session.preferences.response_language, "ro")
+            self.assertEqual(session.preferences.asr_language, "en")
+            self.assertEqual(preferences_from_config(session.graph_config()), session.preferences)
+
+    def test_language_options_schema_and_resolved_names_share_configuration(self):
+        options = onboarding_options()
+        field = options["schema"]["$defs"]["Preferences"]["properties"]["response_language"]
+        self.assertEqual(field["enum"], list(RESPONSE_LANGUAGES.languages))
+        self.assertEqual(field["default"], options["default_response_language"])
+        for code, name in options["languages"].items():
+            preferences = Preferences(personality_id="default", response_language=code)
+            self.assertIn(name, preferences.language_instruction())
+            self.assertIn(preferences.language_instruction(), preferences.response_style())
+        options["languages"].clear()
+        self.assertTrue(RESPONSE_LANGUAGES.languages)
+
+    def test_invalid_language_fails_before_runner_model_setup(self):
+        with TemporaryDirectory() as directory, patch.object(runner, "build_supervisor") as build:
+            path = Path(directory) / "session.json"
+            for code in ("pt", "pt-BR", "Romanian", "xx", "", None, 7):
+                path.write_text(json.dumps({"user_id": "language-test", "preferences": {"response_language": code}}))
+                with self.subTest(code=code), self.assertRaisesRegex(ValidationError, "response_language"):
+                    runner.main(load_session(path))
+            build.assert_not_called()
+
+    def test_invalid_shared_language_configuration_fails_clearly(self):
+        original = RESPONSE_LANGUAGES.model_dump()
+        for update in ({"default_response_language": "xx"}, {"languages": {"en": " "}},
+                       {"instruction_template": "Missing placeholder"},
+                       {"instruction_template": "{language} {unknown}"}):
+            with self.subTest(update=update), self.assertRaises(ValueError):
+                ResponseLanguages.model_validate({**original, **update})
+
 
 class SpeechTests(unittest.TestCase):
     def setUp(self):
@@ -120,6 +163,21 @@ class SpeechTests(unittest.TestCase):
     def test_missing_credentials_allow_local_text_mode(self):
         self.assertEqual(speech.init_asr(), (None, None))
         self.assertIsNone(speech.init_tts(Preferences()))
+
+    def test_response_language_does_not_change_voice_or_asr_parameters(self):
+        client = Mock()
+        client.audio.transcriptions.create.return_value.text = "Olá"
+        for language in ("auto", "pt"):
+            preferences = Preferences(response_language="pt-PT", asr_language=language,
+                                      tts_voice="en-GB-AdaMultilingualNeural")
+            speech.transcribe(client, "fixture", BytesIO(b"audio"), preferences)
+            kwargs = client.audio.transcriptions.create.call_args.kwargs
+            self.assertEqual(kwargs.get("language"), None if language == "auto" else "pt")
+            with patch.dict(os.environ, {"AZURE_SPEECH_KEY": "fake", "AZURE_SPEECH_REGION": "test"}), \
+                    patch.object(speech.speechsdk, "SpeechConfig") as config, \
+                    patch.object(speech.speechsdk, "SpeechSynthesizer"):
+                speech.init_tts(preferences)
+            self.assertEqual(config.return_value.speech_synthesis_voice_name, preferences.tts_voice)
 
     def test_openai_asr_takes_precedence(self):
         with patch.dict(os.environ, {

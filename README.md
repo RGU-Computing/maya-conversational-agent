@@ -375,6 +375,7 @@ The payload is illustrated in [maya/session.example.json](maya/session.example.j
   "user_id": "pilot-participant-123",
   "preferences": {
     "personality_id": "supportive",
+    "response_language": "ro",
     "tts_voice": "en-GB-LibbyNeural",
     "asr_language": "auto"
   }
@@ -392,13 +393,15 @@ FHIR patient mapping remains a separate service requirement.
 | Preference | Default | Meaning |
 | --- | --- | --- |
 | `personality_id` | `supportive` | Warm, patient explanations that acknowledge expressed concerns; alternatives are `concise` and `default` (the original style). |
+| `response_language` | Shared configuration, initially `en` | Generated user-facing text and clarification language; supported codes and full names are in `response_languages.json`. |
 | `tts_voice` | `en-GB-RyanNeural` | Azure Speech voice name. Both local and mirror audio use it. |
 | `asr_language` | `auto` | Whisper automatic detection, or a supported two-letter language code such as `en` or `es`. |
 
 Voice names and recognition languages must be supported by the deployed provider.
 The local validator checks their format, not remote availability. Recognition
-language is separate from the voice used to speak replies; this version does not
-add a response-language/translation setting. The two voice examples already used
+language is separate from both generated response language and the voice used to
+speak replies. `pt-PT` is a response-language code, while explicit Portuguese ASR
+uses `pt`; response language is never forwarded to ASR. The two voice examples already used
 in MAYA are Ryan and Libby; the shared fallback is now Ryan. Set Libby explicitly
 to retain the mirror's previous fallback voice.
 
@@ -410,13 +413,34 @@ MAYA:
 ```python
 from maya.framework.conversation.personalization import SessionConfig, onboarding_options
 
-options = onboarding_options()  # Includes JSON Schema, defaults and personality descriptions.
+options = onboarding_options()  # JSON Schema, defaults, personalities and code-to-language names.
 session = SessionConfig.model_validate(payload)
 
 # For a Python launcher, once per process:
 from maya.framework.supervisor.run_with_vad import main
 main(session)
 ```
+
+An explicit supported `preferences.response_language` in the session takes
+precedence over the default in
+[`response_languages.json`](maya/framework/conversation/response_languages.json).
+Omitting it preserves compatibility with older sessions and currently selects
+English. There is no response-language environment override. Invalid codes fail
+session validation before model execution; restart the runner when changing its
+startup preferences. The shared file also owns the human-editable instruction
+template, resolved using the full language name. Personality remains independent.
+
+The instruction reaches supervisor replies, biomarker readouts, HealthRAG answers,
+clarifications and urgent guidance, and exercise responses. Machine-only routing,
+memory verification and query rewriting keep their existing contracts. HealthRAG's
+existing instruction fingerprint separates cached answers by response language;
+voice-only changes do not invalidate text answers.
+
+This controls model-generated wording, not complete interface localisation. Fixed
+messages, disclaimers, reference headings and some failure fallbacks remain in
+their configured language. See [the language implementation and validation guide](docs/RESPONSE_LANGUAGE.md)
+for the complete boundary, test commands and results. Select a compatible speech
+voice explicitly; response language does not silently replace the chosen voice.
 
 For the CLI, an explicit `--session-config` path takes precedence over
 `MAYA_SESSION_CONFIG`. Fields in the file override environment defaults:
@@ -668,3 +692,142 @@ python -m maya.cli.inspect_memory \
 Long strings are shortened to 500 characters by default to keep demonstrations
 readable. Use `--full` to show complete content, or `--max-string-length 1000`
 to choose another display limit. The script does not write to memory.
+
+## Partner system acceptance suite
+
+The repository-root entry point is **`system_test.py`**. It compares the actual
+MAYA application across Azure chat deployments and the seven response languages
+declared in `response_languages.json`. No production configuration needs to be
+edited to change the model or language under test.
+
+Run it with the Python environment that contains MAYA and the partner SDKs. The
+offline tests need the normal application dependencies; the FHIR contract tests
+also need the supplied `libfhir` wheel. Missing SDKs are reported as skipped and
+make the run **INCOMPLETE**, rather than silently passing.
+
+```bash
+# Read the scenario requirements without credentials or network calls.
+python system_test.py --list
+
+# Check the test runner itself, then run all existing offline regression tests.
+python system_test.py --self-test
+python system_test.py --suite offline
+
+# Focus on memory: save/recall, user isolation, no-write inputs, corrections,
+# repeated facts, and a mixed recall/update after changing language.
+python system_test.py --suite memory \
+  --models configured gpt-5.4-mini --languages all --jobs 2
+
+# Check application notices and health/measurement delivery in all languages.
+python system_test.py --suite localization \
+  --models configured gpt-5.4-mini --languages all --jobs 2
+
+# Compare two deployments in English first.
+python system_test.py --suite matrix \
+  --models configured gpt-5.4-mini --languages en
+
+# Full comparison: regressions, all language workflows and cloud speech.
+python system_test.py --suite all \
+  --models configured gpt-5.4-mini --languages all --jobs 2
+```
+
+`configured` uses the active Azure settings from the environment or `.env`.
+Explicit deployment names override only the deployment name. If a candidate uses
+a different Azure resource, provide a private dotenv file containing its
+`AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` and
+`AZURE_OPENAI_API_VERSION`, then add:
+
+```bash
+--model-env gpt-5.4-mini=/absolute/private/candidate.env
+```
+
+The suite never uncomments or rewrites `.env`. Each model/language job uses a
+fresh process so cached models and module-level extractors cannot retain the
+previous model. Actual deployment selection and returned model identifiers are
+recorded in the JSON report. Other LLM providers require support in MAYA's model
+factory; passing an Azure deployment name does not validate a different provider.
+
+The live matrix contains 55 functional scenarios per model/language pair. It
+combines the established conversation tests with the root-level
+`system_test_workflows.py` and the explicit native-language prompts in
+`system_test_prompts.json`. Coverage includes:
+
+| Function | Representative acceptance scenarios |
+| --- | --- |
+| Supervisor and health agent | Ordinary conversation, fact-only clinical updates, native-language health questions, literature retrieval, urgent bypass and missing evidence |
+| Clarification | Missing treatment context, resume without refetching, and an unknown-test follow-up |
+| Memory | Verified treatment recall, language changes, profile/general-memory recall, corrections, repeated facts, no-write inputs, mixed recall/update, and participant/third-party isolation |
+| Cache | Reuse when the effective context is identical; invalidation when language or context changes |
+| Biomarkers | Values/units, scoped reads, unavailable data, unitless quantities, unsupported temperature and mixed available/missing readings |
+| Phyxio | Every registered exercise tool has a positive native-language request and an explicitly negated request; history errors and safety holds are also checked |
+| Localization | All seven response preferences, native input, mixed input, default language, exact medication/dose retention and fixed application messages |
+| Voice | Generated native-language speech through the actual runner, VAD, ASR, supervisor and TTS; no reference reading, silent startup and resource cleanup |
+
+Medication spelling checks follow the current application's **verbatim-copy**
+policy. A failed spelling check is distinct from a language being unsupported.
+Language identification uses one fixed review deployment (`--judge-model`,
+defaulting to `configured`) across the comparison. These judgments supplement
+structural assertions and do not replace native-speaker or clinical review.
+Configured notice translations are also compared against their source wording for
+omitted qualifications or added advice. The focused `localization` suite runs six
+notice scenarios plus native health and blood-pressure workflows; the full matrix
+includes those six notice scenarios too.
+Each scenario runs once per selected model/language pair. This is acceptance
+coverage, not an estimate of long-run reliability; use separate report directories
+for additional repetitions and retain earlier failures for comparison.
+The general-memory scenario checks both storage and the recalled experience;
+a generic acknowledgement does not count as recall. Its content assertion uses
+explicit translation stems for the controlled fixture. Recall must leave both the
+original user's records and the other user's empty store unchanged. `--suite memory`
+runs the six profile/general-memory scenarios with language review. Its edge cases
+use English input across response-language settings; the original save/recall cases
+use native-language input. Negated exercise requests
+use the same English wording across response-language settings; positive exercise
+requests and the principal conversation/measurement cases use native-language input.
+
+Results go into a new `output/system_test/<timestamp>/` directory:
+
+- `report.html`: readable scenario results, requirements and expandable evidence.
+- `report.json`: model/language labels, application/configuration/test fingerprints, package versions,
+  individual assertions, generated text and model audit information.
+- `junit.xml`: CI-compatible failures, errors and skipped tests.
+- Each job directory contains detailed evidence and a redacted worker log.
+
+Exit status is `0` for a passing selected scope, `1` for behavioral failures,
+`2` for incomplete/error results and `130` for interruption. A hard per-job
+deadline (`--timeout`, default 1,800 seconds) prevents hanging SDK calls or memory
+workers from leaving the suite running indefinitely. `--output` must name a new
+directory. Use `--languages en es`, `--models ...` or `--suite speech` to narrow a
+rerun. The runner does not automatically retry failed assertions into a pass.
+Only one job per tested Azure deployment runs at a time, even when `--jobs` is
+higher. Separate deployments can run concurrently; the language reviewer also
+uses its configured deployment quota.
+
+An interrupted run can be resumed with the same suite, models, language list and
+model credential files:
+
+```bash
+python system_test.py --suite all \
+  --models configured gpt-5.4-mini --languages all --jobs 2 \
+  --resume output/system_test/YOUR_RUN_DIRECTORY
+```
+
+Resume retains completed results, including behavioral failures. Incomplete/error
+attempts are archived before being rerun. Earlier failures that change outcome on
+an infrastructure rerun are flagged for review. Configuration/dependency changes
+and application or test source changes require a new report directory. A report-directory lock prevents two runners
+from writing the same report concurrently.
+
+Live model and speech suites make billable provider calls. All participant
+records are synthetic, conversational memory is isolated in RAM, and Phyxio
+actions are intercepted at the service boundary. Literature retrieval uses the
+local corpus with a RAM index and deterministic embeddings for reproducibility;
+this is not a production semantic-retrieval benchmark. No microphone is opened
+and no audio is played during the cloud speech test.
+
+A passing run covers the selected software scenarios. Deployment review must
+also check physical audio/avatar behavior, real mirror connectivity, live FHIR
+ingestion, PostgreSQL durability, concurrent users/load and native-language
+quality. The report lists those unexercised areas explicitly. Existing application
+defects remain visible as failures; this suite does not change application
+behavior to make a result pass.

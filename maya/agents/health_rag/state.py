@@ -30,6 +30,7 @@ class HealthRagState(BaseAgentState):
     urgent_safety_bypass: NotRequired[bool]
     retrieval_used: NotRequired[bool]
     response_style: NotRequired[str]
+    response_language: NotRequired[str]
     # The text actually searched against the literature. Recorded so a workflow trace can
     # show what was retrieved on, which differs from standalone_question once a
     # multi-turn question has been rewritten.

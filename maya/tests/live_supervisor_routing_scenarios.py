@@ -14,7 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from maya.framework.integrations.models import get_chat_model
 from maya.framework.ontology.registry import OntologyRegistry
-from maya.framework.supervisor.factory import SupervisorRouteDecision
+from maya.framework.supervisor.factory import SupervisorRouteDecision, Profile
 from maya.framework.supervisor.factory import HealthRouteGuardDecision
 from maya.framework.supervisor.prompts import (
     SUPERVISOR_SYSTEM_MESSAGE,
@@ -94,6 +94,7 @@ def run() -> list[dict[str, object]]:
         [
             SUPERVISOR_SYSTEM_MESSAGE.format(
                 user_profile=None,
+                profile_schema=json.dumps(Profile.model_json_schema()),
                 general_memory="No general memories.",
                 time="2026-07-16T12:00:00+01:00",
             ),
@@ -113,14 +114,11 @@ def run() -> list[dict[str, object]]:
                 HumanMessage(content=scenario.text),
             ]
         )
-        selected = set(registry.resolve_model_ids(decision.selected_ontology_models))
         route_type = decision.route_type
-        if decision.fact_only_ontology_update and registry.has_active_bindings(selected):
-            route_type = "direct_answer"
         if route_type == "direct_answer":
             guarded = health_guard.invoke(
                 [
-                    SystemMessage(content=build_health_route_guard_prompt()),
+                    SystemMessage(content=build_health_route_guard_prompt(registry.catalog_for_agent("supervisor"))),
                     HumanMessage(content=scenario.text),
                 ]
             )

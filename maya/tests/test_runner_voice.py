@@ -82,9 +82,10 @@ class RunnerProviderFailureTests(unittest.TestCase):
         self.read = self.enterContext(patch.object(runner, "read_text"))
         self.speak = self.enterContext(patch.object(runner, "speak_output"))
         self.printed = self.enterContext(patch("builtins.print"))
-        self.session = runner.SessionConfig(user_id="synthetic-recovery")
-        self.policy = runner.load_response_policy().model_copy(update={"request_unavailable_text": "Configured retry message."})
-        self.enterContext(patch.object(runner, "load_response_policy", return_value=self.policy))
+        self.session = runner.SessionConfig(user_id="synthetic-recovery",
+                                          preferences=runner.Preferences(response_language="ro"))
+        self.policy = runner.response_policy().model_copy(update={"request_unavailable_text": "Configured retry message."})
+        self.enterContext(patch.object(runner, "response_policy", return_value=self.policy))
 
     @staticmethod
     def rejected():
@@ -109,6 +110,8 @@ class RunnerProviderFailureTests(unittest.TestCase):
         self.assertEqual(len(seen), 3 if resumed else 2)
         self.assertNotEqual(seen[-1][1]["configurable"]["thread_id"], seen[-2][1]["configurable"]["thread_id"])
         self.assertTrue(all(config["configurable"]["user_id"] == self.session.user_id for _, config in seen))
+        self.assertTrue(all(config["configurable"]["preferences"] == self.session.preferences.model_dump()
+                            for _, config in seen))
         spoken = [call.args[2] for call in self.speak.call_args_list]
         self.assertEqual(spoken[-2:], [self.policy.request_unavailable_text, "Recovered"])
         self.assertTrue(all(call.kwargs.get("end_interaction") for call in self.speak.call_args_list))

@@ -50,6 +50,18 @@ class StubRewriteModel:
 
 
 class RetrievalQueryTests(unittest.TestCase):
+    def test_response_language_does_not_translate_machine_only_rewrite(self):
+        model, retriever = StubRewriteModel('Clinical literature query'), StubRetriever()
+        preferences = Preferences(response_language='ro')
+        RetrieveLocalLiterature(retriever, model).before_model({
+            'standalone_question': 'What does that mean?',
+            'conversation_context': 'Previous question about doxorubicin.',
+            'response_style': preferences.response_style(),
+        }, None)
+        self.assertEqual(model.calls, 1)
+        self.assertNotIn(preferences.language_instruction(), model.prompts[0])
+        self.assertEqual(retriever.queries, ['Clinical literature query'])
+
     def test_saved_memory_triggers_rewrite_without_clarification_or_history(self):
         memory = 'User-reported treatment: doxorubicin.'
         model = StubRewriteModel('Bisoprolol suitability after doxorubicin?')

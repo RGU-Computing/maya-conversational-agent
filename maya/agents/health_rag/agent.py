@@ -20,7 +20,7 @@ from maya.agents.health_rag.state import (
 )
 from maya.agents.health_rag.config import HealthRagConfig, load_health_rag_config
 from maya.framework.integrations.models import get_chat_model
-from maya.framework.conversation.responses import load_response_policy
+from maya.framework.conversation.responses import load_response_policy, localize_messages
 from maya.framework.conversation.clarification import load_disambiguation_policy, render_disambiguation_block
 from maya.framework.rag.corpus import (
     chunk_snapshot_path,
@@ -258,7 +258,8 @@ class RetrieveLocalLiterature(AgentMiddleware[HealthRagState, Any]):
             )
         update = {"citations": citations, "retrieval_query": retrieval_query, "retrieval_used": True}
         if not citations:
-            update.update(messages=[AIMessage(content=self.settings.messages.no_evidence)], jump_to="end")
+            messages = localize_messages(self.settings.messages, state.get("response_language"))
+            update.update(messages=[AIMessage(content=messages.no_evidence)], jump_to="end")
         return update
 
 
@@ -272,9 +273,6 @@ def health_rag_prompt(request: ModelRequest, settings: HealthRagConfig | None = 
         settings.prompts.urgent_answer if request.state.get("urgent_safety_bypass") else settings.prompts.answer,
         load_response_policy().health_output_instruction,
     ]
-    if response_style := request.state.get("response_style"):
-        sections.append(response_style)
-
     if conversation_context:
         sections.append(f"Recent health conversation context:\n{conversation_context}")
     if ontology_context:
@@ -287,6 +285,8 @@ def health_rag_prompt(request: ModelRequest, settings: HealthRagConfig | None = 
         for item in citations
     )
     sections.append(f"Retrieved local literature:\n{context}")
+    if response_style := request.state.get("response_style"):
+        sections.append(response_style)
     return "\n\n".join(sections)
 
 
@@ -378,6 +378,7 @@ class HealthRagHandle:
                 decision = decision.model_copy(update={"biomarker_request": None})
             if (not decision.needs_clarification or
                     (decision.biomarker_request and decision.biomarker_request.subject == "current_user"
+                     and decision.biomarker_request.catalog_match == "matched"
                      and decision.biomarker_request.measurement_ids and not decision.urgent_safety_bypass)):
                 return decision
 

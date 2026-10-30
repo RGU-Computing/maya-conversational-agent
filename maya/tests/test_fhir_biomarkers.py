@@ -190,17 +190,27 @@ class FHIRBiomarkerTests(unittest.TestCase):
             self.assertEqual(self.service.fetch(user, request("blood_pressure"), [])[0]["status"], "ok")
             get.assert_called_once_with("blood-pressure", subject=patient)
 
-    def test_multiple_measurements_no_refetch_and_no_partial_success_after_failure(self):
+    def test_multiple_measurements_keep_independent_outcomes_and_are_not_refetched(self):
         get = self.service.provider.client.get
         get.side_effect = [records(observation()), records(observation("heart-rate"))]
         result = self.service.fetch("participant-001", request("blood_pressure", "heart_rate"), [])
-        self.assertEqual(result[0]["status"], "ok")
+        self.assertEqual([item["status"] for item in result], ["ok", "ok"])
         self.assertEqual(self.service.fetch("participant-001", request("blood_pressure"), result), result)
         self.assertEqual(get.call_count, 2)
-        get.side_effect = [records(observation()), []]
-        result = self.service.fetch("participant-001", request("blood_pressure", "heart_rate"), [])[0]
-        self.assertEqual(result["status"], "unavailable")
-        self.assertEqual(result["observations"], [])
+        for ids in (("blood_pressure", "heart_rate"), ("heart_rate", "blood_pressure")):
+            for failed in ([], records(observation("heart-rate", subject={"reference": "Patient/other"})),
+                           records(observation("heart-rate", component=[{"valueQuantity": {"value": 49}}]))):
+                with self.subTest(ids=ids, failed=failed):
+                    get.side_effect = lambda kind, **kwargs: records(observation()) if kind == "blood-pressure" else failed
+                    result = self.service.fetch("participant-001", request(*ids), [])
+                    by_measurement = {item["requested"][0]: item for item in result}
+                    self.assertEqual(by_measurement["blood_pressure"]["status"], "ok")
+                    self.assertEqual(by_measurement["blood_pressure"]["observations"][0]["result"], observation())
+                    self.assertEqual(by_measurement["heart_rate"]["status"], "unavailable")
+                    self.assertEqual(by_measurement["heart_rate"]["observations"], [])
+                    calls = get.call_count
+                    self.assertEqual(self.service.fetch("participant-001", request(*ids), result), result)
+                    self.assertEqual(get.call_count, calls)
 
     def load_config(self):
         with patch.dict(os.environ, {"MAYA_BIOMARKER_CONFIG": str(Path(self.folder.name) / "biomarkers.json")}):

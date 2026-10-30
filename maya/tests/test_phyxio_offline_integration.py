@@ -456,6 +456,44 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
         self.health.agent.invoke.assert_called_once()
         self.assertIn("Matching answer", result["messages"][-1].content)
 
+    def test_language_change_preserves_identity_and_isolates_exact_and_semantic_cache(self):
+        from maya.framework.conversation import responses
+        from maya.tests.test_response_localization import TranslationModel
+        responses._translated_messages.cache_clear()
+        self.addCleanup(responses._translated_messages.cache_clear)
+        self.enterContext(patch.object(responses, "get_chat_model", return_value=TranslationModel()))
+        self.router.invoke.return_value = self.factory.SupervisorRouteDecision(
+            question_subject="general", route_type="health_rag", selected_ontology_models=[])
+        for language, user, expected_calls in [("en", "a", 1), ("ro", "a", 2),
+                                                ("ro", "a", 2), ("en", "a", 2), ("ro", "b", 3)]:
+            preferences = Preferences(response_language=language)
+            self.config = SessionConfig(user_id=user, preferences=preferences).graph_config()
+            self.run_turn("What is cardiovascular health?")
+            self.assertEqual(self.health.agent.invoke.call_count, expected_calls)
+            self.assertEqual(self.health.assess_clarification.call_args.kwargs["response_style"],
+                             preferences.response_style())
+        namespace = ("health_rag", "a", "qa_history")
+        # Leave only an English semantic candidate with a perfect synthetic score.
+        for item in self.store.search(namespace):
+            self.store.delete(namespace, item.key)
+        self.store.put(namespace, "english-only", {"type": "health_rag_summary", "summary": "English cached answer",
+            "user_question": "What is cardiovascular health?", "citations": [],
+            "response_style": self.health.cache_scope(Preferences(response_language="en").response_style(),
+                                                      *self.memory.load_context.return_value)})
+        self.config = SessionConfig(user_id="a", preferences=Preferences(response_language="ro")).graph_config()
+        self.run_turn("What is cardiovascular health?")
+        self.assertEqual(self.health.agent.invoke.call_count, 4)
+
+    def test_language_is_forwarded_to_exercise_but_not_machine_routing(self):
+        preferences = Preferences(response_language="pt-PT")
+        self.config = SessionConfig(user_id="offline-user", preferences=preferences).graph_config()
+        self.run_turn("Show my exercises.")
+        invocation = self.decision_model.invoke.call_args
+        self.assertIn(preferences.language_instruction(), invocation.args[0][0].content)
+        self.assertEqual(invocation.kwargs["config"]["configurable"]["preferences"]["response_language"], "pt-PT")
+        self.assertNotIn(preferences.language_instruction(), self.router.invoke.call_args.args[0][0].content)
+        self.service.show_routine.assert_called_once_with("42")
+
     def test_supervisor_cache_excludes_answers_from_changed_prompt_or_profile(self):
         self.router.invoke.return_value = self.factory.SupervisorRouteDecision(question_subject="current_user", route_type="health_rag", selected_ontology_models=[])
         def ask():
@@ -521,7 +559,8 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
                 self.config = SessionConfig(user_id="subject-check").graph_config()
                 self.router.invoke.return_value = self.factory.SupervisorRouteDecision(
                     question_subject=subject, route_type="health_rag", selected_ontology_models=["cancer_history"],
-                    biomarker_request=BiomarkerRequest(subject="current_user", measurement_ids=["blood_pressure"]))
+                    biomarker_request=BiomarkerRequest(subject="current_user", reason="Fixture selection.",
+                                                      catalog_match="matched", measurement_ids=["blood_pressure"]))
                 self.memory.load_context.reset_mock()
                 self.run_turn("A health question about someone else.")
                 self.memory.load_context.assert_not_called()
@@ -691,6 +730,47 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
         self.assertEqual(message.additional_kwargs["clarification"]["status"], "error")
         self.assertNotIn("presentation", message.additional_kwargs)
 
+    def test_localized_clarification_failure_needs_no_model_after_assessment_error(self):
+        from maya.framework.conversation import responses
+        from maya.tests.test_response_localization import TranslationModel
+        responses._translated_messages.cache_clear()
+        self.addCleanup(responses._translated_messages.cache_clear)
+        translator = TranslationModel()
+        self.enterContext(patch.object(responses, "get_chat_model", return_value=translator))
+        self.config = SessionConfig(user_id="offline-user", preferences={"response_language": "fr"}).graph_config()
+        self.router.invoke.return_value = self.factory.SupervisorRouteDecision(
+            question_subject="current_user", route_type="health_rag", selected_ontology_models=[])
+
+        def fail(*args, **kwargs):
+            translator.error = AssertionError("No translation call allowed after assessment failure")
+            raise ClarificationAssessmentError("fixture failure")
+
+        self.health.assess_clarification.side_effect = fail
+        result = self.run_turn("Is my medicine okay with my treatments?")
+        self.assertEqual(result["messages"][-1].content, responses.response_policy("fr").clarification_unavailable_text)
+        self.assertEqual(len(translator.calls), 2)  # Policy + HealthRAG messages prepared before assessment.
+        self.health.agent.invoke.assert_not_called()
+
+    def test_pending_memory_notice_and_cached_health_prefix_use_session_language(self):
+        from maya.framework.conversation import responses
+        from maya.tests.test_response_localization import TranslationModel
+        responses._translated_messages.cache_clear()
+        self.addCleanup(responses._translated_messages.cache_clear)
+        self.enterContext(patch.object(responses, "get_chat_model", return_value=TranslationModel()))
+        self.config = SessionConfig(user_id="offline-user", preferences={"response_language": "fr"}).graph_config()
+        self.router.invoke.return_value = self.factory.SupervisorRouteDecision(
+            question_subject="current_user", route_type="health_rag", selected_ontology_models=[])
+        self.memory.load_context.side_effect = self.factory.OntologyMemoryNotReady("pending")
+        result = self.run_turn("What did I tell you?")
+        self.assertTrue(result["messages"][-1].content.startswith("Texte traduit"))
+        self.assertEqual(result["messages"][-1].additional_kwargs["memory_status"], "pending")
+        self.memory.load_context.side_effect = None
+        self.run_turn("What is cardiovascular health?")
+        result = self.run_turn("What is cardiovascular health?")
+        self.assertTrue(result["messages"][-1].content.startswith(
+            responses.localize_messages(self.health.config.messages, "fr").cached_answer_prefix))
+        self.health.agent.invoke.assert_called_once()
+
     def test_pending_memory_stops_before_clarification_or_retrieval(self):
         self.router.invoke.return_value = self.factory.SupervisorRouteDecision(question_subject="current_user",
             route_type="health_rag", selected_ontology_models=["cancer_history"])
@@ -753,6 +833,22 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
         self.assertFalse(self.health.assess_clarification.call_args.kwargs["allow_biomarker_lookup"])
         self.assertIn("134", self.health.agent.invoke.call_args.args[0]["biomarker_context"])
         self.assertTrue(result["messages"][-1].content)
+
+    def test_ambiguous_supervisor_and_assessment_requests_wait_for_clarification(self):
+        from maya.tests.test_biomarkers import request
+        self.setup_biomarkers(supervisor_fetch=True)
+        unresolved = request("blood_pressure", catalog_match="ambiguous")
+        self.router.invoke.return_value = self.router.invoke.return_value.model_copy(
+            update={"biomarker_request": unresolved})
+        self.health.assess_clarification.return_value = DisambiguationDecision(
+            needs_clarification=True, clarification_question="Which measurement do you mean?",
+            biomarker_request=unresolved)
+        with patch.object(self.biomarkers.provider, "fetch_latest") as fetch:
+            result = self.run_turn("Explain my result.")
+            fetch.assert_not_called()
+        self.assertTrue(result["__interrupt__"])
+        self.health.assess_clarification.assert_called_once()
+        self.health.agent.invoke.assert_not_called()
 
     def test_observation_lookup_bypasses_preexisting_cached_answer(self):
         self.setup_biomarkers()

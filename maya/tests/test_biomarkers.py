@@ -16,8 +16,9 @@ def demo_service():
         return load_biomarker_service()
 
 
-def request(*ids, subject="current_user"):
-    return BiomarkerRequest(subject=subject, measurement_ids=list(ids))
+def request(*ids, subject="current_user", catalog_match="matched"):
+    return BiomarkerRequest(subject=subject, reason="Fixture measurement selection.",
+                            catalog_match=catalog_match, measurement_ids=list(ids))
 
 
 class BiomarkerTests(unittest.TestCase):
@@ -28,11 +29,12 @@ class BiomarkerTests(unittest.TestCase):
         return self.service.fetch(user, request(*ids), list(previous))
 
     def test_latest_per_measurement_preserves_components_units_dates_and_source(self):
-        result = self.fetch("blood_pressure", "blood_glucose")[0]
-        self.assertEqual(result["status"], "ok")
-        self.assertTrue(result["synthetic"])
-        self.assertEqual({r["id"] for r in result["observations"]}, {"bp-latest", "glucose-latest"})
-        bp = next(r for r in result["observations"] if r["id"] == "bp-latest")
+        results = self.fetch("blood_pressure", "blood_glucose")
+        self.assertEqual([result["status"] for result in results], ["ok", "ok"])
+        self.assertTrue(all(result["synthetic"] for result in results))
+        observations = [record for result in results for record in result["observations"]]
+        self.assertEqual({r["id"] for r in observations}, {"bp-latest", "glucose-latest"})
+        bp = next(r for r in observations if r["id"] == "bp-latest")
         self.assertEqual(bp["result"]["components"][0], {"label": "Systolic", "value": 134, "unit": "mmHg"})
         self.assertTrue(bp["measured_at"].startswith("2026-10-10"))
         self.assertTrue(bp["source"])
@@ -58,6 +60,27 @@ class BiomarkerTests(unittest.TestCase):
         self.assertEqual(self.fetch("invented")[0]["status"], "unsupported_measurement")
         with patch.object(self.service.provider, "fetch_latest", side_effect=TimeoutError):
             self.assertEqual(self.fetch("blood_pressure")[0]["status"], "unavailable")
+
+    def test_unresolved_requests_never_fetch_even_with_a_valid_catalog_id(self):
+        with patch.object(self.service.provider, "fetch_latest") as fetch:
+            for resolution in ("ambiguous", "unsupported"):
+                with self.subTest(resolution=resolution):
+                    result = self.service.fetch("participant-001", request("blood_pressure", catalog_match=resolution), [])
+                    self.assertEqual(result[0]["status"], resolution + "_measurement")
+                    self.assertEqual(result[0]["observations"], [])
+                    self.assertEqual(result[0]["requested"], [])
+            fetch.assert_not_called()
+        # An unresolved request must not prevent a later clarified request.
+        clarified = self.fetch("blood_pressure", previous=result)
+        self.assertEqual(clarified[-1]["status"], "ok")
+
+    def test_valid_measurement_survives_an_unsupported_measurement_in_either_order(self):
+        for ids in (("blood_pressure", "unknown"), ("unknown", "blood_pressure")):
+            with self.subTest(ids=ids):
+                results = {result["requested"][0]: result for result in self.fetch(*ids)}
+                self.assertEqual(results["blood_pressure"]["status"], "ok")
+                self.assertEqual(results["unknown"]["status"], "unsupported_measurement")
+                self.assertEqual(results["unknown"]["observations"], [])
 
     def test_provider_replacement_cannot_return_another_patients_record(self):
         record = self.service.provider.records[0].model_copy(update={"patient_id": "other"})

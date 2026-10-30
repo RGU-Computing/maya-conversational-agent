@@ -10,10 +10,25 @@ from typing import Literal, Protocol
 from langchain_core.tools import tool
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from maya.framework.conversation.responses import localize_text
+
 
 class BiomarkerRequest(BaseModel):
     subject: Literal["current_user", "other", "unknown"]
-    measurement_ids: list[str] = Field(description="Exact IDs from the available observation catalog; never invent IDs.")
+    reason: str = Field(description=(
+        "Identify the measurement needed from the user's request and established context before matching the catalog. "
+        "Explain the match or what remains unidentified; catalog availability is not evidence of what the user means."
+    ))
+    catalog_match: Literal["matched", "ambiguous", "unsupported"] = Field(description=(
+        "Whether the measurement's identity matches the catalog, NOT whether its value is known. "
+        "matched when the measurement is identified and has a catalog entry, even without a value or unit; "
+        "ambiguous only when its identity is unknown; unsupported when identified but absent from the catalog. "
+        "Missing method, value or unit does not change catalog membership."
+    ))
+    measurement_ids: list[str] = Field(description=(
+        "Exact catalog IDs for matched measurements only; empty for ambiguous or unsupported requests. "
+        "Never substitute a different measurement or select a merely related catalog item."
+    ))
 
 
 class Observation(BaseModel):
@@ -102,6 +117,9 @@ class BiomarkerService:
     def fetch(self, user_id: str, request: BiomarkerRequest | None, previous: list[dict]) -> list[dict]:
         if request is None or request.subject != "current_user":
             return previous
+        if request.catalog_match != "matched":
+            return [*previous, {"requested": [], "observations": [], "missing": [], "synthetic": False,
+                               "status": f"{request.catalog_match}_measurement", "reason": request.reason}]
         attempted = {key for result in previous for key in result["requested"]}
         requested = list(dict.fromkeys(key for key in request.measurement_ids if key not in attempted))
         if not requested:
@@ -132,16 +150,18 @@ class BiomarkerService:
                     "missing": [key for key in measurement_ids if key not in found],
                     "observations": [r.model_dump(mode="json", exclude={"patient_id"}) for r in records]}
 
-        return [*previous, fetch_latest_biomarkers.invoke({"measurement_ids": requested})]
+        # Each measurement keeps its own outcome: a failed lookup must not discard
+        # another measurement's verified observations. Validation remains unchanged.
+        return [*previous, *(fetch_latest_biomarkers.invoke({"measurement_ids": [key]}) for key in requested)]
 
     def render_context(self, results: list[dict]) -> str:
         if not results:
             return ""
         return self.config.context_instruction + "\nObservation lookup results:\n" + json.dumps(results)
 
-    def label_answer(self, text: str, results: list[dict]) -> str:
+    def label_answer(self, text: str, results: list[dict], response_language: str | None = None) -> str:
         if self.config.synthetic_notice and any(result["synthetic"] and result["observations"] for result in results):
-            return self.config.synthetic_notice + "\n\n" + text
+            return localize_text(self.config.synthetic_notice, response_language) + "\n\n" + text
         return text
 
 

@@ -2,6 +2,7 @@
   "user_id": "pilot-participant-123",
   "preferences": {
     "personality_id": "supportive",
+    "response_language": "en",
     "tts_voice": "en-GB-LibbyNeural",
     "asr_language": "auto"
   }
