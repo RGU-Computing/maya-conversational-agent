@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import os
 import re
+import unicodedata
 from contextlib import ExitStack
 from typing import Dict, Tuple
 
@@ -34,7 +35,7 @@ class DeterministicMemoryEmbeddings(Embeddings):
 
     def _embed(self, text: str) -> list[float]:
         values = [0.0] * self.size
-        for token in re.findall(r"[a-z0-9]+", text.lower()):
+        for token in re.findall(r"[^\W_]+", unicodedata.normalize("NFC", text).lower()):
             values[hash(token) % self.size] += 1.0
         norm = sum(value * value for value in values) ** 0.5 or 1.0
         return [value / norm for value in values]

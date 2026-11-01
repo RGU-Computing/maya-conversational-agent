@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -38,7 +39,9 @@ class DeterministicEmbeddings(Embeddings):
 
     def _embed(self, text: str) -> list[float]:
         values = [0.0] * self.size
-        for token in re.findall(r"[a-z0-9]+", text.lower()):
+        # Keep Greek and other Unicode words; ASCII-only tokenization creates
+        # zero vectors and undefined cosine scores for non-Latin queries.
+        for token in re.findall(r"[^\W_]+", unicodedata.normalize("NFC", text).lower()):
             values[hash(token) % self.size] += 1.0
         norm = sum(value * value for value in values) ** 0.5 or 1.0
         return [value / norm for value in values]

@@ -696,7 +696,7 @@ to choose another display limit. The script does not write to memory.
 ## Partner system acceptance suite
 
 The repository-root entry point is **`system_test.py`**. It compares the actual
-MAYA application across Azure chat deployments and the seven response languages
+MAYA application across Azure chat deployments and the nine response languages
 declared in `response_languages.json`. No production configuration needs to be
 edited to change the model or language under test.
 
@@ -729,6 +729,9 @@ python system_test.py --suite matrix \
 # Full comparison: regressions, all language workflows and cloud speech.
 python system_test.py --suite all \
   --models configured gpt-5.4-mini --languages all --jobs 2
+
+# Full software acceptance for German and Greek on the active deployment.
+python system_test.py --suite all --models configured --languages de el
 ```
 
 `configured` uses the active Azure settings from the environment or `.env`.
@@ -760,7 +763,7 @@ combines the established conversation tests with the root-level
 | Cache | Reuse when the effective context is identical; invalidation when language or context changes |
 | Biomarkers | Values/units, scoped reads, unavailable data, unitless quantities, unsupported temperature and mixed available/missing readings |
 | Phyxio | Every registered exercise tool has a positive native-language request and an explicitly negated request; history errors and safety holds are also checked |
-| Localization | All seven response preferences, native input, mixed input, default language, exact medication/dose retention and fixed application messages |
+| Localization | All nine response preferences, native input, mixed input, default language, exact medication/dose retention and fixed application messages |
 | Voice | Generated native-language speech through the actual runner, VAD, ASR, supervisor and TTS; no reference reading, silent startup and resource cleanup |
 
 Medication spelling checks follow the current application's **verbatim-copy**

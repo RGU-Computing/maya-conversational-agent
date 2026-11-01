@@ -22,6 +22,8 @@ UTTERANCES = {
     'fi': 'Maya kerro minulle yksi kiinnostava asia Kuusta.',
     'pt-PT': 'Maya conta-me uma curiosidade sobre a Lua.',
     'fr': 'Maya raconte-moi un fait intéressant sur la Lune.',
+    'de': 'Maya, erzähle mir eine interessante Tatsache über den Mond.',
+    'el': 'Maya, πες μου κάτι ενδιαφέρον για τη Σελήνη.',
 }
 
 HEALTH_QUESTIONS = {
@@ -32,6 +34,8 @@ HEALTH_QUESTIONS = {
     'fi': 'Mitä syöpähoidon jälkeinen kardiotoksisuus tarkoittaa yleisesti?',
     'pt-PT': 'Em geral, o que é a cardiotoxicidade após o tratamento do cancro?',
     'fr': 'En général, qu’est-ce que la cardiotoxicité après un traitement contre le cancer ?',
+    'de': 'Was versteht man allgemein unter Kardiotoxizität nach einer Krebsbehandlung?',
+    'el': 'Γενικά, τι είναι η καρδιοτοξικότητα μετά από θεραπεία για τον καρκίνο;',
 }
 
 

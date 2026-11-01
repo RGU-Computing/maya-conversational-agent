@@ -148,11 +148,11 @@ class ResponseLocalizationTests(TestCase):
     def test_new_language_uses_configuration_without_a_code_branch(self):
         from maya.framework.conversation import personalization
         configured = responses.RESPONSE_LANGUAGES.model_copy(update={
-            "languages": {**responses.RESPONSE_LANGUAGES.languages, "de": "German"}})
+            "languages": {**responses.RESPONSE_LANGUAGES.languages, "nl": "Dutch"}})
         with patch.object(responses, "RESPONSE_LANGUAGES", configured), \
                 patch.object(personalization, "RESPONSE_LANGUAGES", configured):
-            responses.response_policy("de")
-        self.assertIn("Target response language: German", self.model.calls[0][0].content)
+            responses.response_policy("nl")
+        self.assertIn("Target response language: Dutch", self.model.calls[0][0].content)
 
     def test_incomplete_or_blank_translation_cannot_remove_a_notice(self):
         for invalid in ({}, {"texts": [" " for _ in responses.ResponseMessages.model_fields]}, {"texts": ["Incomplete"]}):

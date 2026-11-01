@@ -38,6 +38,8 @@ remain unchanged. Restart MAYA to load changed startup preferences/configuration
 | `fi` | Finnish |
 | `pt-PT` | Portuguese (Portugal) |
 | `fr` | French |
+| `de` | German |
+| `el` | Greek |
 
 The mapping, default and editable instruction template have one configuration
 source. `onboarding_options()` exports `languages`, `default_response_language`
@@ -130,6 +132,71 @@ and completes before final speech; there is no unsolicited startup speech.
 This change does not localize Phyxio's listening/transcribing/cancellation UI,
 exercise-service raw failure strings, or developer-facing terminal/device messages.
 Those adapter paths are separate from the health/memory notice presentation path.
+
+## German and Greek extension — 2026-11-01
+
+German (`de`) and Greek (`el`) are now available through the same session and
+onboarding configuration, bringing the supported response choices to nine.
+Both languages have native workflow and speech fixtures. The full software suite
+for these languages can be run with:
+
+```bash
+.venv/bin/python system_test.py --suite all --models configured --languages de el
+```
+
+The first run exposed an ASCII-only tokenizer in the deterministic literature and
+memory embedding helpers: a Greek-only query produced a zero vector and failed
+cosine search. Both helpers now tokenize Unicode words and normalize equivalent
+accent encodings. Regression tests exercise actual vector-store retrieval and
+preservation of existing ASCII-only vectors. **Existing persisted deterministic
+indexes containing non-ASCII text need consistent re-embedding before relying on
+similarity search with the new tokenizer.** No persistent index or participant
+data was rewritten here; these runs build fresh RAM indexes. The production
+HuggingFace literature-embedding backend is unaffected by this tokenizer change.
+
+The acceptance scorer now recognizes explicit Greek transliterations of its
+controlled personal/place names, including in participant-isolation checks.
+Medication names, unit symbols and stored profile fields retain their stricter
+assertions. All eight affected cases in the first run were reviewed from saved
+outputs, including passing cases; three Greek spelling-only failures were removed
+in a separate evaluation record. Original reports were retained unchanged.
+
+Validation used the configured `gpt-4.1-mini` deployment, real model/ASR/TTS calls,
+synthetic participant services and isolated RAM storage. The corrected application's
+full run completed all five jobs with **625 passes and 5 failures**, with no
+infrastructure errors. Offline regressions pass **352/352** (including five existing
+local benchmark tests); harness self-tests pass **20/20**.
+
+| Language | Functional scenarios | Language/translation reviews | Cloud speech job |
+| --- | --- | --- | --- |
+| German | 54/55 | 79/79 | PASS |
+| Greek | 51/55 | 79/79 | PASS |
+
+The five full-run failures are German experience recall through a write route;
+Greek correction recall through a write route; repeated clarification after a
+Greek-to-Romanian language change despite available context; a handled assessment
+error instead of another-person clarification; and Greek weight output translating
+the required `kg` symbol to `κιλά`. Identity checks passed. Unit preservation failed
+in both full executions and remains unresolved.
+
+After the full run, the German recall fixture was clarified to remove the ambiguous
+phrase “nach meiner Aussage.” A focused German memory run passes **5/6 functional
+scenarios and 24/25 total checks**: the clarified native recall case passes, but
+correction recall still uses the write route despite returning the correct city.
+Application source hashes match the full run; only this test-prompt file changed
+before the focused follow-up. No full-run result was replaced by the follow-up.
+Acceptance remains failing; these are not deployment or native-speaker sign-offs.
+
+Evidence under `output/system_test/`:
+
+- `20261101T005832Z_0fdeeb/`: initial full run, including the Unicode error;
+  `evaluation-review-de-el.json` contains the saved-output scoring review.
+- `20261101T011858Z_5b53c0/`: full run after the tokenizer and scoring corrections.
+- `20261101T013741Z_9c7665/`: German memory follow-up with the clarified prompt.
+
+Each run retains HTML, JSON and JUnit reports. Physical mirror/audio behavior,
+live FHIR ingestion, PostgreSQL durability, and clinical/native-language quality
+remain separate deployment checks.
 
 ## Measurement and routing follow-up — 2026-10-30
 

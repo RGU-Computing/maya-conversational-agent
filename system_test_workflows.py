@@ -119,14 +119,28 @@ def run_notice_checks(language):
     return rows
 
 
+def fixture_name_present(text, name, language):
+    """Recognize controlled personal/place names in user-facing fixture answers.
+
+    Greek transliterations preserve the named person/city. Medication spellings,
+    identifiers, unit symbols and stored profile fields retain their own stricter
+    assertions; this is not a general translation or semantic evaluator.
+    """
+    aliases = {"el": {"Sam": ("Σαμ",), "York": ("Γιορκ", "Υόρκη"),
+                      "Bath": ("Μπαθ",), "Bristol": ("Μπρίστολ",)}}
+    candidates = (name, *aliases.get(language, {}).get(name, ()))
+    return any(candidate.casefold() in text.casefold() for candidate in candidates)
+
+
 def memory_content_checks(saved, recalled, other):
     """Check the controlled appointment fixture, not just a nonempty reply.
 
-    These stems accept common translations of nervous/anxious in the seven
+    These stems accept common translations of nervous/anxious in the configured
     test languages, and English records produced by the memory extractor.
     They are a narrow fixture assertion, not a general semantic evaluator.
     """
-    stems = ("nerv", "anxi", "anxie", "emoți", "emoti", "hermost", "jänn", "ahdist", "ansios", "ansia")
+    stems = ("nerv", "anxi", "anxie", "emoți", "emoti", "hermost", "jänn", "ahdist", "ansios", "ansia",
+             "aufgereg", "angespann", "ängst", "αγχ", "άγχ", "νευρ", "ανησυχ", "ανήσυχ")
     def contains_experience(value):
         text = str(value).casefold()
         return any(stem in text for stem in stems)
@@ -362,11 +376,11 @@ def run_workflows(language, directory, *, selected=()):
                 checks = {"initial_record_saved": len(before) == 1,
                           "same_record_updated": bool(after) and set(before) == set(after) and before != after,
                           "correction_saved": any("Bath" in str(item.get("content" if key == "memory" else "location", "")) for item in after.values()),
-                          "recalled_correction": recalled["route"] == "direct_answer" and "Bath" in recalled["answer"],
+                          "recalled_correction": recalled["route"] == "direct_answer" and fixture_name_present(recalled["answer"], "Bath", language),
                           "repeat_does_not_duplicate": set(final) == set(after) and len(final) == 1,
                           "completed": all(completed(item) for item in (first, corrected, recalled, repeated))}
                 if key == "profile":
-                    checks["name_preserved"] = any(item.get("name") == "Sam" for item in after.values()) and "Sam" in recalled["answer"]
+                    checks["name_preserved"] = any(item.get("name") == "Sam" for item in after.values()) and fixture_name_present(recalled["answer"], "Sam", language)
                 record(name, checks, first, corrected, recalled, repeated, before=before, after=after, final=final)
             elif name == "memory.mixed_and_language_change":
                 first = turn("I visited Bristol yesterday. Please remember that.", user, response_language="en")
@@ -380,7 +394,7 @@ def run_workflows(language, directory, *, selected=()):
                               "only_new_assertion_saved": len(after) == len(before) + 1 and any(
                                   "painting" in item.get("content", "").lower()
                                   and "Which city" not in item.get("content", "") for key, item in after.items() if key not in before),
-                              "answers_recall": "Bristol" in mixed["answer"] and completed(mixed)},
+                              "answers_recall": fixture_name_present(mixed["answer"], "Bristol", target) and completed(mixed)},
                        mixed, first_turn=first, before=before, after=after, expected_language=target)
             elif name in ("profile.save_and_recall", "memory.save_and_recall"):
                 key = name.split(".")[0]
@@ -398,8 +412,8 @@ def run_workflows(language, directory, *, selected=()):
                           "no_health_record_lookup": not recalled["sdk_calls"] and not other["sdk_calls"]}
                 if key == "profile":
                     checks.update(correct_profile_saved=any(item.get("name") == "Sam" and "York" in (item.get("location") or "") for item in saved),
-                                  recalled_values="Sam" in recalled["answer"] and "York" in recalled["answer"],
-                                  no_other_participant_disclosure="Sam" not in other["answer"] and "York" not in other["answer"])
+                                  recalled_values=all(fixture_name_present(recalled["answer"], name, language) for name in ("Sam", "York")),
+                                  no_other_participant_disclosure=not any(fixture_name_present(other["answer"], name, language) for name in ("Sam", "York")))
                 else:
                     checks.update(memory_content_checks(saved, recalled, other))
                 record(name, checks, first, recalled, other, saved_records=saved,
@@ -459,6 +473,48 @@ def harness_self_tests():
             for key in TOOLS:
                 self.assertIn("native.tool." + key, WORKFLOW_REQUIREMENTS)
                 self.assertIn("negated.tool." + key, WORKFLOW_REQUIREMENTS)
+
+        def test_every_language_has_speech_and_health_inputs(self):
+            import ast
+            source = ast.parse((ROOT / "maya/tests/live_response_language_runner.py").read_text(encoding="utf-8"))
+            fixtures = {node.targets[0].id: ast.literal_eval(node.value)
+                        for node in source.body if isinstance(node, ast.Assign)
+                        and isinstance(node.targets[0], ast.Name)
+                        and node.targets[0].id in {"UTTERANCES", "HEALTH_QUESTIONS"}}
+            self.assertEqual(set(fixtures), {"UTTERANCES", "HEALTH_QUESTIONS"})
+            for name, prompts in fixtures.items():
+                with self.subTest(fixture=name):
+                    self.assertEqual(set(prompts), set(LANGUAGES))
+                    self.assertTrue(all(isinstance(value, str) and value.strip() for value in prompts.values()))
+
+        def test_german_and_greek_memory_recall_preserves_content_and_isolation(self):
+            for recalled in ("Du warst nervös.", "Du warst angespannt.",
+                             "Ένιωθες άγχος.", "Ήσουν αγχωμένος.", "Ήσουν ανήσυχη."):
+                with self.subTest(recalled=recalled):
+                    checks = memory_content_checks([{"content": recalled}],
+                                                   {"route": "direct_answer", "answer": recalled},
+                                                   {"answer": "I do not have that information."})
+                    self.assertTrue(all(checks.values()))
+                    leak = memory_content_checks([{"content": recalled}],
+                                                 {"route": "direct_answer", "answer": recalled},
+                                                 {"answer": recalled})
+                    self.assertFalse(leak["no_other_participant_experience_disclosure"])
+
+        def test_greek_fixture_names_accept_transliteration_but_not_another_name(self):
+            for source, translated in (("Sam", "Σαμ"), ("York", "Γιορκ"),
+                                       ("York", "Υόρκη"), ("Bath", "Μπαθ"), ("Bristol", "Μπρίστολ")):
+                with self.subTest(name=source, translated=translated):
+                    self.assertTrue(fixture_name_present(translated, source, "el"))
+                    self.assertTrue(fixture_name_present(source, source, "el"))
+                    self.assertFalse(fixture_name_present("Δεν γνωρίζω.", source, "el"))
+            self.assertFalse(fixture_name_present("Μπρίστολ", "Bath", "el"))
+            self.assertFalse(fixture_name_present("Μπαθ", "Bristol", "el"))
+            self.assertFalse(fixture_name_present("κιλά", "kg", "el"))
+
+        def test_greek_profile_isolation_detects_transliterated_disclosure(self):
+            for leaked in ("Το όνομά σου είναι Σαμ.", "Ζεις στην Υόρκη."):
+                with self.subTest(answer=leaked):
+                    self.assertTrue(any(fixture_name_present(leaked, name, "el") for name in ("Sam", "York")))
 
         def test_memory_acknowledgement_is_not_recall(self):
             checks = memory_content_checks([{"content": "User felt nervous."}],

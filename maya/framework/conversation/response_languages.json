@@ -7,7 +7,9 @@
     "es": "Spanish",
     "fi": "Finnish",
     "pt-PT": "Portuguese (Portugal)",
-    "fr": "French"
+    "fr": "French",
+    "de": "German",
+    "el": "Greek"
   },
   "instruction_template": "Write all user-facing responses and clarification questions in {language}. This configured preference takes precedence over the language of the user's input or previous conversation. Copy supplied medication names, identifiers, codes and unit symbols verbatim: do not translate, inflect or replace them. If grammar would normally change a medication name, keep its exact source spelling in quotation marks and rephrase the surrounding sentence instead. Preserve numerical values and uncertainty. Keep quoted evidence in its original language. Do not translate tool names, parameter names, enum values, ontology identifiers or other machine-only fields."
 }
