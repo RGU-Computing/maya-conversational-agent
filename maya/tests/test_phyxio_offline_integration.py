@@ -17,6 +17,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
+from maya.tests.model_stubs import model_call_stub
+
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
@@ -80,6 +82,9 @@ def make_service():
 
 class ExerciseServiceContractTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch("maya.framework.integrations.models.model_call", side_effect=model_call_stub))
+        self.enterContext(patch("maya.framework.conversation.responses.model_call", side_effect=model_call_stub))
+        self.enterContext(patch("maya.agents.health_rag.agent.model_call", side_effect=model_call_stub))
         self.service = make_service()
         self.enterContext(patch.object(exercise, "get_phyxio_service", return_value=self.service))
         self.enterContext(patch.object(phyxio_sessions, "get_phyxio_service", return_value=self.service))
@@ -211,6 +216,9 @@ class ExerciseServiceContractTests(unittest.TestCase):
 
 class SupervisorExerciseIntegrationTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch("maya.framework.integrations.models.model_call", side_effect=model_call_stub))
+        self.enterContext(patch("maya.framework.conversation.responses.model_call", side_effect=model_call_stub))
+        self.enterContext(patch("maya.agents.health_rag.agent.model_call", side_effect=model_call_stub))
         self.enterContext(patch.dict(os.environ, {"LANGCHAIN_TRACING_V2": "false", "LANGSMITH_TRACING": "false"}))
         # Load an isolated copy: factory constructs model/extractor globals at import.
         # Patching those constructors keeps this suite credential-free and leaves the
@@ -871,7 +879,11 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
         result = self.run_turn("Show my latest blood pressure.")
         self.health.assess_clarification.assert_not_called()
         self.health.agent.invoke.assert_not_called()
-        self.assertIn("bp-latest", self.factory.model.invoke.call_args.args[0][-1].content)
+        sent = json.loads(self.factory.model.invoke.call_args.args[0][-1].content)
+        reading = sent["lookup_results"][0]["observations"][0]
+        self.assertEqual(reading["measurement_id"], "blood_pressure")
+        self.assertEqual(reading["result"]["components"][0]["value"], 134)
+        self.assertNotIn("id", reading)
         self.assertEqual(result["messages"][-1].additional_kwargs["source"], "biomarkers")
 
     def test_new_turn_clears_observations_and_urgent_assessment_does_not_fetch(self):

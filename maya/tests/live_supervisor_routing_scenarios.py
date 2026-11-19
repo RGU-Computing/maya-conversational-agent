@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from maya.framework.integrations.models import get_chat_model
+from maya.framework.integrations.models import get_chat_model, model_call
 from maya.framework.ontology.registry import OntologyRegistry
 from maya.framework.supervisor.factory import SupervisorRouteDecision, Profile
 from maya.framework.supervisor.factory import HealthRouteGuardDecision
@@ -102,8 +102,8 @@ def run() -> list[dict[str, object]]:
         ]
     )
     model = get_chat_model()
-    router = model.with_structured_output(SupervisorRouteDecision, strict=True)
-    health_guard = model.with_structured_output(HealthRouteGuardDecision, strict=True)
+    router = model_call(model, SupervisorRouteDecision, strict=True)
+    health_guard = model_call(model, HealthRouteGuardDecision, strict=True)
     results: list[dict[str, object]] = []
     failures: list[str] = []
 

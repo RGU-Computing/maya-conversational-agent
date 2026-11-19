@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 from maya.framework.integrations.phyxio.bridge import get_phyxio_service
 from .sessions import get_latest_exercise_session, load_session_service
 from .phyxio_sessions import PhyxioSessionProvider
-from maya.framework.integrations.models import get_chat_model
+from maya.framework.integrations.models import get_chat_model, model_call
+from maya.framework.integrations.privacy import privacy_config
 
 load_dotenv()
 
@@ -558,6 +559,7 @@ class _PhyxioExerciseNode:
             return self._result_message("Exercise request is empty.", tool_call_id)
 
         invoke_config = self._forward_config(config)
+        model_config = privacy_config(invoke_config, state.get("privacy_context"))
         response_style = preferences_from_config(config).response_style()
 
         try:
@@ -573,7 +575,7 @@ class _PhyxioExerciseNode:
                     ),
                     *(recent_dialogue(messages) or [HumanMessage(content=user_text)]),
                 ],
-                config=invoke_config,
+                config=model_config,
             )
         except Exception as exc:
             return self._result_message(f"Exercise decision failed: {exc}", tool_call_id)
@@ -617,7 +619,7 @@ class _PhyxioExerciseNode:
                         )
                     ),
                 ],
-                config=invoke_config,
+                config=model_config,
             )
         except Exception:
             return self._result_message(fallback, tool_call_id, extra)
@@ -638,8 +640,8 @@ def build(spec: Dict[str, Any] | None = None):
 
     llm = get_chat_model()
     return _PhyxioExerciseNode(
-        decision_model=llm.with_structured_output(ExerciseActionDecision, strict=True),
-        response_model=llm.with_structured_output(ExerciseAgentResponse, strict=True),
+        decision_model=model_call(llm, ExerciseActionDecision, strict=True),
+        response_model=model_call(llm, ExerciseAgentResponse, strict=True),
         decision_prompt=decision_prompt,
         response_prompt=response_prompt,
         tools=tools,

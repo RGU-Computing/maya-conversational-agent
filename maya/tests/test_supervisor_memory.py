@@ -8,6 +8,8 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
+from maya.tests.model_stubs import model_call_stub
+
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import InMemorySaver
@@ -18,6 +20,7 @@ from maya.framework.conversation.personalization import SessionConfig
 
 class SupervisorMemoryTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch("maya.framework.integrations.models.model_call", side_effect=model_call_stub))
         self.enterContext(patch.dict(os.environ, {"LANGSMITH_TRACING": "false", "LANGCHAIN_TRACING_V2": "false"}))
         name = "maya.framework.supervisor._memory_test_factory"
         path = Path(__file__).resolve().parents[1] / "framework/supervisor/factory.py"
@@ -88,6 +91,21 @@ class SupervisorMemoryTests(unittest.TestCase):
         prompt = self.guard.invoke.call_args.args[0][0].content
         self.assertIn(catalog, prompt)
         self.assertIn("writable binding", prompt)
+
+    def test_saved_identity_is_forwarded_to_router_guard_and_reply_per_participant(self):
+        profile = self.factory.Profile(name="Alice Example", location="York").model_dump()
+        self.store.put(("profile", "user-1"), "profile", profile)
+        self.router.invoke.return_value = self.factory.SupervisorRouteDecision(
+            route_type="direct_answer", selected_ontology_models=["clinical_profile"])
+        result = self.turn("Hello")
+        self.assertEqual(result["privacy_context"]["name"], "Alice Example")
+        for target in (self.router, self.guard, self.model):
+            config = target.invoke.call_args.kwargs["config"]["configurable"]
+            self.assertEqual(config["user_id"], "user-1")
+            self.assertEqual(config["privacy_context"]["name"], "Alice Example")
+        self.turn("Hello", user="user-2")
+        self.assertIsNone(self.router.invoke.call_args.kwargs["config"]["configurable"]["privacy_context"]["name"])
+        self.assertEqual(self.records("profile"), {"profile": profile})
 
     def test_profile_recall_uses_profile_even_without_ontology_records(self):
         profile = self.factory.Profile(name="Sam", location="York").model_dump()

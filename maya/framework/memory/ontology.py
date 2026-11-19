@@ -15,6 +15,7 @@ from langgraph.store.base import BaseStore
 from pydantic import BaseModel, Field
 
 from maya.framework.ontology.registry import OntologyRegistry
+from maya.framework.integrations.models import model_call
 
 
 logger = logging.getLogger(__name__)
@@ -78,14 +79,14 @@ ExtractorFactory = Callable[[Any], Any]
 
 
 def _create_extractor(model: Any) -> Any:
-    return model.with_structured_output(
+    return model_call(model,
         OntologyMemoryExtraction,
         method="function_calling",
     )
 
 
 def _create_verifier(model: Any) -> Any:
-    return model.with_structured_output(
+    return model_call(model,
         OntologyMemoryVerification,
         method="function_calling",
     )
@@ -207,6 +208,7 @@ class OntologyMemoryService:
         source_message_id: str,
         source_text: str,
         model_ids: Sequence[str],
+        privacy_context: dict | None = None,
     ) -> bool:
         """Persist a small pending job and return without waiting for its LLM work."""
 
@@ -224,6 +226,7 @@ class OntologyMemoryService:
             "source_message_id": source_message_id,
             "source_text": source_text.strip(),
             "selected_model_ids": selected,
+            "privacy_context": dict(privacy_context or {}),
         }
         self.store.put(self.pending_namespace(user_id), job_key, payload, index=False)
         self._submit(job_key, payload)
@@ -380,10 +383,17 @@ class OntologyMemoryService:
                 continue
 
         extractor = self._extractor(model_ids)
+        identity = payload.get("privacy_context")
+        if identity is None:
+            # Jobs created before privacy context was persisted may be recovered
+            # after an upgrade. Resolve only this participant's existing profile.
+            profiles = self.store.search(("profile", user_id), limit=1)
+            identity = {key: profiles[0].value.get(key) for key in ("name", "location")} if profiles else {}
         config = {
             "configurable": {
                 "thread_id": str(payload["thread_id"]),
                 "user_id": user_id,
+                "privacy_context": identity,
             }
         }
         extraction = extractor.invoke(

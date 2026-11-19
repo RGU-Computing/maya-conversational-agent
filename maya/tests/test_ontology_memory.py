@@ -150,6 +150,36 @@ class OntologyMemoryServiceTests(unittest.TestCase):
     def pending(self) -> list[Any]:
         return self.store.search(self.service.pending_namespace("user-1"), limit=100)
 
+    def test_background_extraction_and_verification_keep_participant_privacy_context(self):
+        evidence = "I take Bisoprolol 2.5 mg."
+        identity = {"name": "Alice Example", "patient_id": "patient-1"}
+        self.extractor.responses.append([medication_record(evidence)])
+        self.service.schedule(user_id="user-1", thread_id="thread-1", source_message_id="message-1",
+                              source_text=evidence, model_ids=["clinical_profile"], privacy_context=identity)
+        for calls in (self.extractor.calls, self.verifier.calls):
+            self.assertEqual(calls[0][1]["configurable"]["privacy_context"], identity)
+            self.assertEqual(calls[0][1]["configurable"]["user_id"], "user-1")
+        self.assertEqual(len(self.records()), 1)
+        self.assertEqual(self.records("user-2"), [])
+        self.assertEqual(identity, {"name": "Alice Example", "patient_id": "patient-1"})
+
+    def test_recovered_legacy_job_loads_only_its_participants_profile(self):
+        evidence = "I take Bisoprolol 2.5 mg."
+        self.store.put(("profile", "user-1"), "profile", {"name": "Alice Example", "location": "York"})
+        self.store.put(("profile", "user-2"), "profile", {"name": "Other Participant", "location": "Bath"})
+        self.store.put(self.service.pending_namespace("user-1"), "legacy-job", {
+            "type": "ontology_memory_job", "user_id": "user-1", "thread_id": "thread-1",
+            "source_message_id": "message-1", "source_text": evidence,
+            "selected_model_ids": ["clinical_profile"],
+        })
+        self.extractor.responses.append([medication_record(evidence)])
+        self.service.render_context(user_id="user-1", agent_id="health_rag", model_ids=["clinical_profile"])
+        for calls in (self.extractor.calls, self.verifier.calls):
+            self.assertEqual(calls[0][1]["configurable"]["privacy_context"],
+                             {"name": "Alice Example", "location": "York"})
+        self.assertEqual(len(self.records()), 1)
+        self.assertEqual(self.pending(), [])
+
     def test_loaded_context_uses_one_record_snapshot_and_preserves_user_isolation(self):
         evidence = 'I received doxorubicin chemotherapy.'
         self.extractor.responses.append([treatment_record(evidence)])

@@ -5,6 +5,8 @@ import unittest
 from typing import Any
 from unittest.mock import patch
 
+from maya.tests.model_stubs import model_call_stub
+
 from langchain_core.messages import HumanMessage
 
 from maya.agents.phyxio_exercise_agent.agent import (
@@ -83,6 +85,9 @@ def _node(
 
 
 class PhyxioStructuredDecisionTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch("maya.agents.phyxio_exercise_agent.agent.model_call", side_effect=model_call_stub))
+
     def test_validated_action_executes_exactly_one_selected_tool(self):
         node, decision_model, response_model = _node(_decision("show_exercises"))
 

@@ -19,7 +19,8 @@ from maya.agents.health_rag.state import (
     DisambiguationDecision, ClarificationQuestion, RewrittenQuery,
 )
 from maya.agents.health_rag.config import HealthRagConfig, load_health_rag_config
-from maya.framework.integrations.models import get_chat_model
+from maya.framework.integrations.models import get_chat_model, model_call
+from maya.framework.integrations.privacy import PrivacyMiddleware
 from maya.framework.conversation.responses import load_response_policy, localize_messages
 from maya.framework.conversation.clarification import load_disambiguation_policy, render_disambiguation_block
 from maya.framework.rag.corpus import (
@@ -212,7 +213,7 @@ class RetrieveLocalLiterature(AgentMiddleware[HealthRagState, Any]):
                     ),
                 ]
             )
-            chain = prompt | self.model.with_structured_output(RewrittenQuery)
+            chain = prompt | model_call(self.model, RewrittenQuery)
             rewritten = chain.invoke(
                 {
                     "instructions": self.settings.prompts.query_rewrite,
@@ -320,6 +321,7 @@ class HealthRagHandle:
         biomarker_context: str = "",
         biomarker_catalog: str = "",
         allow_biomarker_lookup: bool = True,
+        config: dict | None = None,
     ) -> DisambiguationDecision:
         if not question.strip() or model is None:
             raise ClarificationAssessmentError("A question and assessment model are required.")
@@ -341,13 +343,13 @@ class HealthRagHandle:
             part for part in [self.ontology_block, ontology_context.strip(), biomarker_catalog, biomarker_context] if part
         )
         try:
-            chain = prompt | model.with_structured_output(DisambiguationDecision, strict=True)
+            chain = prompt | model_call(model, DisambiguationDecision, strict=True)
             inputs = {"instructions": self.config.prompts.assessment, "question": question,
                       "conversation_context": conversation_context, "ontology": combined_ontology,
                       "allow_biomarker_lookup": allow_biomarker_lookup}
             # One structural repair is allowed; a failed repair never authorizes an answer.
             for repair in (False, True):
-                decision = DisambiguationDecision.model_validate(chain.invoke(inputs))
+                decision = DisambiguationDecision.model_validate(chain.invoke(inputs, config=config))
                 try:
                     if not decision.urgent_safety_bypass and any(
                         not check.satisfied and not check.missing_requirement.strip()
@@ -397,7 +399,7 @@ class HealthRagHandle:
                     ),
                 ]
             )
-            wording_chain = wording_prompt | model.with_structured_output(
+            wording_chain = wording_prompt | model_call(model,
                 ClarificationQuestion,
                 strict=True,
             )
@@ -411,7 +413,7 @@ class HealthRagHandle:
                                    decision.materiality_reason or decision.ambiguity_reason),
                     "conversation_context": conversation_context,
                     "question": question,
-                }
+                }, config=config,
             )
             if not isinstance(wording, ClarificationQuestion):
                 wording = ClarificationQuestion.model_validate(wording)
@@ -459,7 +461,7 @@ def build(spec: dict[str, Any] | None = None) -> HealthRagHandle:
     agent = create_agent(
         llm,
         tools=[],
-        middleware=[RetrieveLocalLiterature(retriever, llm, settings), configured_prompt],
+        middleware=[RetrieveLocalLiterature(retriever, llm, settings), configured_prompt, PrivacyMiddleware()],
         state_schema=HealthRagState,
         name=AGENT_ID,
     )

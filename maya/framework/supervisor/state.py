@@ -17,6 +17,7 @@ class SupervisorState(TypedDict):
     biomarker_results: NotRequired[list[dict]]
     resolved_user_input: NotRequired[str]
     memory_update_status: NotRequired[str]
+    privacy_context: NotRequired[dict[str, str | None]]
     route_type: NotRequired[
         Literal[
             "direct_answer",

@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from maya.framework.conversation.personalization import Preferences, RESPONSE_LANGUAGES
 from maya.framework.conversation.text import strip_citations_and_references, strip_markdown
-from maya.framework.integrations.models import get_chat_model
+from maya.framework.integrations.models import get_chat_model, model_call
 
 
 class ResponseMessages(BaseModel):
@@ -66,7 +66,7 @@ def _translated_messages(source: tuple[str, ...], instruction: str,
                          model_key: tuple[str, str, str]) -> tuple[str, ...]:
     # Cache immutable strings, not a mutable model shared between sessions. Source
     # wording, language instruction and deployment identity form the cache key.
-    translated = get_chat_model().with_structured_output(TranslatedMessages, strict=True).invoke([
+    translated = model_call(get_chat_model(), TranslatedMessages, strict=True).invoke([
         SystemMessage(content=instruction),
         HumanMessage(content=json.dumps(source, ensure_ascii=False)),
     ])

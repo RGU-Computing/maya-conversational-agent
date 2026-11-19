@@ -176,10 +176,10 @@ def run_workflows(language, directory, *, selected=()):
     store = InMemoryStore()
     routing_decisions = []
     memory_proposals = []
-    structured_output = factory.model.with_structured_output
+    structured_output = factory.model_call
 
-    def observed_routing(model, schema, **kwargs):
-        runnable = structured_output(schema, **kwargs)
+    def observed_routing(model, schema=None, **kwargs):
+        runnable = structured_output(model, schema, **kwargs)
         if schema is factory.MemoryVerification:
             return runnable | RunnableLambda(capture_memory)
         if schema not in (factory.SupervisorRouteDecision, factory.HealthRouteGuardDecision):
@@ -220,7 +220,7 @@ def run_workflows(language, directory, *, selected=()):
             return worker
 
         stack.enter_context(patch.object(factory, "get_postgres_memory", return_value=(store, InMemorySaver())))
-        stack.enter_context(patch.object(type(factory.model), "with_structured_output", new=observed_routing))
+        stack.enter_context(patch.object(factory, "model_call", new=observed_routing))
         stack.enter_context(patch.object(factory, "memory_extractor", factory.memory_extractor | RunnableLambda(capture_memory)))
         stack.enter_context(patch.object(factory, "profile_extractor", factory.profile_extractor | RunnableLambda(capture_memory)))
         stack.enter_context(patch.object(factory, "OntologyMemoryService", side_effect=memory_factory))

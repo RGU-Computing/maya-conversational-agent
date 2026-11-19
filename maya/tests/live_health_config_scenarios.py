@@ -29,6 +29,7 @@ def run(selected=(), *, service=None):
     from maya.agents.health_rag.agent import HealthRagHandle, RetrieveLocalLiterature
     from maya.framework.memory.ontology import OntologyMemoryService, OntologyMemoryExtraction, OntologyMemoryVerification
     from maya.framework.conversation.personalization import SessionConfig
+    from maya.framework.integrations.models import model_call
     from maya.framework.supervisor import factory
     from maya.tests.test_biomarkers import demo_service
 
@@ -40,7 +41,7 @@ def run(selected=(), *, service=None):
     def build(specs=None):
         def traced_memory_model(schema):
             def create(model):
-                structured = model.with_structured_output(schema, method='function_calling')
+                structured = model_call(model, schema, method='function_calling')
                 def invoke(messages, config):
                     result = structured.invoke(messages, config)
                     memory_events.append({'stage': schema.__name__, 'input': messages[-1].content,

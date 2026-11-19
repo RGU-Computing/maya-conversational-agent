@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+from maya.tests.model_stubs import model_call_stub
 
 from langchain_core.runnables import RunnableLambda
 
@@ -55,6 +57,7 @@ class StubStructuredModel:
 
 class HealthRagClarificationTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.enterContext(patch("maya.agents.health_rag.agent.model_call", side_effect=model_call_stub))
         self.handle = HealthRagHandle(
             name="health_rag",
             agent=None,
@@ -492,6 +495,7 @@ class OntologyRuleCheckTests(unittest.TestCase):
     """
 
     def setUp(self) -> None:
+        self.enterContext(patch("maya.agents.health_rag.agent.model_call", side_effect=model_call_stub))
         self.handle = HealthRagHandle(
             name="health_rag",
             agent=None,

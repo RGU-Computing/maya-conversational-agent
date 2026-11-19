@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from maya.tests.model_stubs import model_call_stub
+
 from langchain.agents.middleware import ModelRequest
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnableLambda
@@ -22,6 +24,7 @@ from maya.tests.test_health_rag_retrieval import StubRetriever
 
 class HealthConfigTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch("maya.agents.health_rag.agent.model_call", side_effect=model_call_stub))
         self.settings = load_health_rag_config()
 
     def test_json_and_jsonl_preserve_urls_braces_and_comment_like_prompt_text(self):
@@ -79,7 +82,7 @@ class HealthConfigTests(unittest.TestCase):
                     patch.object(agent, 'get_chat_model', return_value=model), \
                     patch.object(agent, 'create_agent') as create:
                 handle = agent.build({'config_path': str(path)})
-            retrieval, prompt = create.call_args.kwargs['middleware']
+            retrieval, prompt, privacy = create.call_args.kwargs['middleware']
             update = retrieval.before_model({'standalone_question': 'Current question',
                                              'conversation_context': 'History once'}, None)
             rendered = prompt.wrap_model_call(ModelRequest(model=Mock(), messages=[], state=update),

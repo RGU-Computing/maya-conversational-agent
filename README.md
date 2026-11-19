@@ -64,6 +64,28 @@ The Phyxio session-history wrapper uses the positional page argument required by
 `libphyxio-connect` 26.5.29. Actual ICE, microphone and speaker checks must run on
 the mirror. Partner ontology files are retained unchanged.
 
+Model requests share the LangChain privacy middleware in
+`maya/framework/integrations/privacy.py`. It replaces known session/profile
+identifiers, email addresses and international `+` phone formats with temporary
+aliases in system prompts, history and tool data. Each request has its own local
+alias map; replies and structured results are restored before local memory
+validation or tool use. Direct and typed calls use `model_call` in `models.py`;
+HealthRAG also applies the middleware after its dynamic prompt. New model-call
+sites must use this boundary. No additional LLM calls or NLP dependencies are used.
+
+This covers known identities and the stated formats, not previously unknown
+names or arbitrary personal details in free text. Numeric-only IDs are protected
+in labelled identity fields and patient references, rather than replacing the
+same number in clinical measurements. Biomarker prompts receive clinical fields;
+raw FHIR records, patient lookup, stored conversations and logging remain local
+application concerns. This middleware protects model requests; it does not redact
+tracing/logging integrations. The privacy boundary tests run as part of
+`python system_test.py --suite offline` and capture provider payloads without
+network access.
+
+The latest privacy validation results, timings and remaining acceptance issue
+are recorded in [system_test_privacy_results.json](system_test_privacy_results.json).
+
 The connector subclass only forwards Phyxio's documented callbacks; MAYA's speech
 logic lives in `PhyxioService`, so it cannot override the library's internal state
 methods. On the mirror's single avatar control, tapping again while recording or

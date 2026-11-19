@@ -18,7 +18,8 @@ from maya.agents.health_rag.agent import ClarificationAssessmentError, Disambigu
 from maya.framework.integrations.biomarkers import BiomarkerRequest, load_biomarker_service
 from maya.framework.memory import get_postgres_memory   
 from maya.framework.memory.ontology import OntologyMemoryService, OntologyMemoryNotReady
-from maya.framework.integrations.models import get_chat_model
+from maya.framework.integrations.models import get_chat_model, model_call
+from maya.framework.integrations.privacy import privacy_config
 from maya.framework.conversation.personalization import preferences_from_config
 from maya.framework.conversation.history import recent_dialogue
 from maya.framework.conversation.responses import health_presentation, localize_messages, localize_text, response_policy
@@ -121,7 +122,7 @@ class MemoryUpdate(BaseModel):
     )
 
 
-memory_extractor = model.with_structured_output(MemoryUpdate, strict=True)
+memory_extractor = model_call(model, MemoryUpdate, strict=True)
 
 class Profile(BaseModel):
     """This is the profile of the user you are chatting with"""
@@ -145,7 +146,7 @@ class ProfileUpdate(BaseModel):
     )
 
 
-profile_extractor = model.with_structured_output(ProfileUpdate, strict=True)
+profile_extractor = model_call(model, ProfileUpdate, strict=True)
 
 
 class MemoryVerification(BaseModel):
@@ -241,6 +242,9 @@ def build_supervisor(*, biomarker_service=None):
             user_profile = memories[0].value
         else:
             user_profile = None
+        identity = {key: (user_profile or {}).get(key) for key in ("name", "location")}
+        identity["patient_id"] = biomarkers.config.patient_map.get(user_id)
+        config = privacy_config(config, identity)
         
         # Retrieve general memory from the store
         namespace = ("memory", user_id)
@@ -253,7 +257,7 @@ def build_supervisor(*, biomarker_service=None):
         system_msg = "\n\n".join(
             [
                 SUPERVISOR_SYSTEM_MESSAGE.format(
-                    user_profile=user_profile,
+                    user_profile=json.dumps(user_profile, ensure_ascii=False),
                     profile_schema=json.dumps(Profile.model_json_schema()),
                     general_memory=general_memory,
                     time=datetime.now().isoformat(),
@@ -267,7 +271,7 @@ def build_supervisor(*, biomarker_service=None):
         dialogue = recent_dialogue(state["messages"])
         routing_messages = [SystemMessage(content=system_msg), *dialogue]
 
-        decision = model.with_structured_output(SupervisorRouteDecision, strict=True).invoke(
+        decision = model_call(model, SupervisorRouteDecision, strict=True).invoke(
             routing_messages, config=config
         )
 
@@ -276,12 +280,12 @@ def build_supervisor(*, biomarker_service=None):
             and decision.route_type == "direct_answer"
             and latest_user is not None
         ):
-            health_guard = model.with_structured_output(HealthRouteGuardDecision, strict=True).invoke(
+            health_guard = model_call(model, HealthRouteGuardDecision, strict=True).invoke(
                 [
                     SystemMessage(content=build_health_route_guard_prompt(
                         ontology_registry.catalog_for_agent("supervisor"))),
                     *dialogue,
-                ]
+                ], config=config,
             )
             if health_guard.route_type == "phyxio_exercise_agent" and not (
                 health_guard.exercise_reference.strip()
@@ -303,6 +307,7 @@ def build_supervisor(*, biomarker_service=None):
             return memory_unavailable(selected_models, config)
         resolved_user_input = latest_user.content.strip() if latest_user is not None else ""
         turn_update = {
+            "privacy_context": identity,
             "route_type": route_type,
             "selected_ontology_models": selected_models,
             "ontology_context": ontology_context,
@@ -327,11 +332,12 @@ def build_supervisor(*, biomarker_service=None):
             )
         ]
         answer_messages.extend(dialogue)
-        response = model.invoke(answer_messages, config=config)
+        response = model_call(model).invoke(answer_messages, config=config)
         return {"messages": [response], **turn_update}
 
     def update_memory(state: SupervisorState, config: RunnableConfig, store: BaseStore):
         """Save supported assertions from this turn, then answer using the actual result."""
+        config = privacy_config(config, state.get("privacy_context"))
         namespace = ("memory", config["configurable"]["user_id"])
         existing = {item.key: item.value for item in store.search(namespace)}
         latest_user = _latest_user_message(state["messages"])
@@ -346,7 +352,7 @@ def build_supervisor(*, biomarker_service=None):
             for memory in result.memories:
                 if not memory.content.strip() or (memory.memory_id is not None and memory.memory_id not in existing):
                     continue
-                verification = model.with_structured_output(MemoryVerification, strict=True).invoke([
+                verification = model_call(model, MemoryVerification, strict=True).invoke([
                     SystemMessage(content=MEMORY_VERIFICATION_INSTRUCTION),
                     HumanMessage(content=json.dumps({"latest_user_message": source_text,
                                                     "existing_records": existing,
@@ -362,7 +368,7 @@ def build_supervisor(*, biomarker_service=None):
                 store.put(namespace, key, record)
                 existing[key] = record
                 saved.append(record)
-        response = model.invoke([
+        response = model_call(model).invoke([
             SystemMessage(content="Answer the user's latest message using only their stored memories below. "
                           "Acknowledge only the facts listed in saved_this_turn as saved. If that list is empty, "
                           "do not claim you saved anything. For recall, answer from stored_memories; if absent, say you do not know."
@@ -375,6 +381,7 @@ def build_supervisor(*, biomarker_service=None):
 
     def update_profile(state: SupervisorState, config: RunnableConfig, store: BaseStore):
         """Update this user's profile only from explicit assertions in the latest message."""
+        config = privacy_config(config, state.get("privacy_context"))
         namespace = ("profile", config["configurable"]["user_id"])
         existing = store.search(namespace)
         profile = existing[0].value if existing else None
@@ -395,7 +402,7 @@ def build_supervisor(*, biomarker_service=None):
                            if value != previous.get(key)
                            and (value not in (None, []) or previous.get(key) not in (None, []))}
                 if changes:
-                    verification = model.with_structured_output(MemoryVerification, strict=True).invoke([
+                    verification = model_call(model, MemoryVerification, strict=True).invoke([
                         SystemMessage(content=MEMORY_VERIFICATION_INSTRUCTION),
                         HumanMessage(content=json.dumps({"latest_user_message": source_text,
                                                         "existing_records": profile,
@@ -404,7 +411,7 @@ def build_supervisor(*, biomarker_service=None):
                     if verification.supported:
                         store.put(namespace, existing[0].key if existing else "profile", updated)
                         profile, saved = updated, True
-        response = model.invoke([
+        response = model_call(model).invoke([
             SystemMessage(content="Answer the user's latest message from their stored profile below. "
                           "Confirm an update only when saved_this_turn is true. Otherwise do not claim to save anything. "
                           "For recall, answer from stored_profile; if absent, say you do not know."
@@ -412,16 +419,20 @@ def build_supervisor(*, biomarker_service=None):
             HumanMessage(content=json.dumps({"latest_user_message": source_text, "stored_profile": profile,
                                             "saved_this_turn": saved}, ensure_ascii=False)),
         ], config=config)
-        return {"messages": [response]}
+        return {"messages": [response], "privacy_context": {
+            **(state.get("privacy_context") or {}),
+            **{key: (profile or {}).get(key) for key in ("name", "location")},
+        }}
 
     def biomarker_readout(state: SupervisorState, config: RunnableConfig):
+        config = privacy_config(config, state.get("privacy_context"))
         results = state.get("biomarker_results") or []
-        response = model.invoke([
+        response = model_call(model).invoke([
             SystemMessage(content=biomarkers.config.readout_instruction
                           + "\n\n" + biomarkers.config.context_instruction
                           + preferences_from_config(config).response_style()),
             HumanMessage(content=json.dumps({"question": state.get("resolved_user_input"),
-                                            "lookup_results": results})),
+                                            "lookup_results": biomarkers.model_results(results)})),
         ], config=config)
         return {"messages": [AIMessage(
             content=biomarkers.label_answer(response.content, results, preferences_from_config(config).response_language),
@@ -431,7 +442,8 @@ def build_supervisor(*, biomarker_service=None):
     @task
     def assess_health_clarification(question: str, conversation_context: str,
                                   ontology_context: str, response_style: str,
-                                  user_id: str, results: list[dict], subject: str) -> dict[str, Any]:
+                                  user_id: str, results: list[dict], subject: str,
+                                  identity: dict) -> dict[str, Any]:
         """Checkpoint assessment and optional lookup together across clarification resume."""
         def assess(allow_lookup=True):
             return agent_by_name["health_rag"].assess_clarification(
@@ -440,6 +452,7 @@ def build_supervisor(*, biomarker_service=None):
                 biomarker_catalog=biomarkers.catalog_context(results) if subject == "current_user" else "",
                 biomarker_context=biomarkers.render_context(results),
                 allow_biomarker_lookup=allow_lookup and subject == "current_user",
+                config=privacy_config({"configurable": {"user_id": user_id}}, identity),
             )
         decision = assess()
         if (subject == "current_user" and decision.biomarker_request and decision.biomarker_request.subject == "current_user"
@@ -455,6 +468,7 @@ def build_supervisor(*, biomarker_service=None):
         store: BaseStore,
     ) -> dict[str, Any]:
         """Answer medical questions from the local literature corpus."""
+        config = privacy_config(config, state.get("privacy_context"))
         messages = state["messages"]
         selected_models = ontology_registry.resolve_model_ids(
             state.get("selected_ontology_models") or [],
@@ -511,7 +525,7 @@ def build_supervisor(*, biomarker_service=None):
         try:
             assessed = assess_health_clarification(
                 question, health_context, ontology_context, preferences.response_style(),
-                user_id, biomarker_results, subject,
+                user_id, biomarker_results, subject, state.get("privacy_context") or {},
             ).result()
             biomarker_results = assessed["biomarkers"]
             clarification_decision = DisambiguationDecision.model_validate(assessed["decision"])
@@ -693,6 +707,7 @@ def build_supervisor(*, biomarker_service=None):
             source_message_id=source_message_id,
             source_text=source_text,
             model_ids=state.get("selected_ontology_models") or [],
+            privacy_context=state.get("privacy_context") or {},
         )
         return {"memory_update_status": "scheduled" if scheduled else "skipped"}
 

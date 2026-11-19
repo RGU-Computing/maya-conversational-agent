@@ -4,6 +4,8 @@ import json
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
+from maya.tests.model_stubs import model_call_stub
+
 from pydantic import ValidationError
 
 from maya.framework.conversation import responses
@@ -35,6 +37,8 @@ class TranslationModel:
 
 class ResponseLocalizationTests(TestCase):
     def setUp(self):
+        self.enterContext(patch("maya.framework.integrations.models.model_call", side_effect=model_call_stub))
+        self.enterContext(patch("maya.framework.conversation.responses.model_call", side_effect=model_call_stub))
         responses._translated_messages.cache_clear()
         self.addCleanup(responses._translated_messages.cache_clear)
         self.model = TranslationModel()

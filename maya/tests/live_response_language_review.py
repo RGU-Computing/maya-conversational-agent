@@ -28,7 +28,7 @@ def run(paths=()):
     os.environ.update(LANGSMITH_TRACING='false', LANGCHAIN_TRACING_V2='false')
     from langchain_core.messages import SystemMessage, HumanMessage
     from maya.framework.conversation.personalization import RESPONSE_LANGUAGES
-    from maya.framework.integrations.models import get_chat_model
+    from maya.framework.integrations.models import get_chat_model, model_call
     from maya.framework.integrations.biomarkers import load_biomarker_service
     from maya.agents.health_rag.config import load_health_rag_config
     notices = [load_biomarker_service().config.synthetic_notice, load_health_rag_config().messages.cached_answer_prefix]
@@ -60,7 +60,7 @@ def run(paths=()):
                         continue
                     seen.add((code, text))
                     samples[code].append({'sample_id': f'{path.stem}/{case.get("case", "runner")}/{index}', 'text': text})
-    reviewer = get_chat_model().with_structured_output(LanguageReview, strict=True)
+    reviewer = model_call(get_chat_model(), LanguageReview, strict=True)
     report = {'scope': 'Model-assisted review of generated text after removing known application-owned English prefixes. Not native-speaker certification.',
               'reports': [str(path) for path in paths], 'excluded_fixed_outputs': fixed_outputs, 'languages': []}
     output = root / 'output/response_language_review.json'

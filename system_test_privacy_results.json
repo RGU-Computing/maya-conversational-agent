@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "validated_at_utc": "2026-11-19T13:20:20.730420+00:00",
+  "scope": "Known-identifier LangChain request privacy; synthetic fixtures and RAM stores; live mirror was not restarted.",
+  "environment": {
+    "python": "3.13.9",
+    "packages": {
+      "langchain": "1.1.3",
+      "langchain-openai": "1.1.2",
+      "langgraph": "1.0.4",
+      "libfhir": "26.10.16",
+      "libphyxio-connect": "26.10.26",
+      "openai": "2.11.0"
+    }
+  },
+  "reports": {
+    "verified-final-offline": {
+      "suite": "offline",
+      "status": "PASS",
+      "counts": {
+        "PASS": 367
+      },
+      "completed_at_utc": "2026-11-19T13:18:56.699304+00:00",
+      "local_evidence_path": "output/privacy-20261119/verified-final-offline/report.json",
+      "evidence_sha256": "27e176ce543d4caca60e2261899ec83e6b6bf40b81e84d80ccfbac0226709af0"
+    },
+    "verified-final-memory": {
+      "suite": "memory",
+      "status": "PASS",
+      "counts": {
+        "PASS": 50
+      },
+      "completed_at_utc": "2026-11-19T13:20:20.730420+00:00",
+      "local_evidence_path": "output/privacy-20261119/verified-final-memory/report.json",
+      "evidence_sha256": "e9281ba90377c39f10caf2e00fac7a4f8d4a31bbc21fa2d52077c3d3907becaa"
+    },
+    "acceptance-final": {
+      "suite": "all",
+      "status": "FAIL",
+      "counts": {
+        "PASS": 643,
+        "FAIL": 1
+      },
+      "completed_at_utc": "2026-11-19T13:17:38.015351+00:00",
+      "local_evidence_path": "output/privacy-20261119/acceptance-final/report.json",
+      "evidence_sha256": "59fb95c3fa26fb7933a09c6396fabd4183e8d8200ba8c8f0d0d56798c1cb4449"
+    }
+  },
+  "validation_order": "The broad acceptance run preceded the final checkpointer=False performance correction. Final offline and two-model memory suites passed after that correction.",
+  "live_privacy": {
+    "gpt-4.1-mini": {
+      "protected_scenarios": 9,
+      "all_paired_scenarios_passed": true,
+      "languages": [
+        "en",
+        "ro",
+        "it",
+        "es",
+        "fi",
+        "pt-PT",
+        "fr",
+        "de",
+        "el"
+      ],
+      "median_seconds": {
+        "before": 1.434,
+        "after": 1.46
+      }
+    },
+    "gpt-5.4-mini": {
+      "protected_scenarios": 9,
+      "all_paired_scenarios_passed": true,
+      "languages": [
+        "en",
+        "ro",
+        "it",
+        "es",
+        "fi",
+        "pt-PT",
+        "fr",
+        "de",
+        "el"
+      ],
+      "median_seconds": {
+        "before": 0.872,
+        "after": 0.892
+      }
+    }
+  },
+  "local_performance": {
+    "iterations_per_case": 100,
+    "provider": "httpx.MockTransport, no network",
+    "cases": [
+      {
+        "characters": 79,
+        "before": {
+          "median_ms": 1.758,
+          "p95_ms": 1.816
+        },
+        "after": {
+          "median_ms": 2.521,
+          "p95_ms": 2.806
+        },
+        "paired_added_ms": {
+          "median_ms": 0.771,
+          "p95_ms": 1.073
+        },
+        "provider_calls_per_invocation": {
+          "before": [
+            1
+          ],
+          "after": [
+            1
+          ]
+        }
+      },
+      {
+        "characters": 14639,
+        "before": {
+          "median_ms": 1.833,
+          "p95_ms": 1.88
+        },
+        "after": {
+          "median_ms": 3.197,
+          "p95_ms": 4.748
+        },
+        "paired_added_ms": {
+          "median_ms": 1.362,
+          "p95_ms": 2.928
+        },
+        "provider_calls_per_invocation": {
+          "before": [
+            1
+          ],
+          "after": [
+            1
+          ]
+        }
+      }
+    ],
+    "agent_construction": {
+      "median_ms": 1.222,
+      "p95_ms": 1.472
+    },
+    "interpretation": "Local CPU/serialization overhead, not an end-to-end Azure latency claim. Agent construction is separate; existing call sites may construct at invocation time."
+  },
+  "remaining_acceptance_issue": {
+    "case": "language_change_with_memory",
+    "model": "gpt-5.4-mini",
+    "finding": "The stored Doxorubicin record remained intact, but the router omitted cancer_history, leaving it out of retrieval context.",
+    "control": "A frozen corresponding routing request was byte-for-byte identical with and without privacy protection. Repeated selections varied. The original-call-path core control passed.",
+    "evidence": "comparison/router-control.json",
+    "disposition": "Retained as an open routing reliability issue; no routing workaround added."
+  },
+  "limitations": [
+    "Unknown free-text names are not guessed.",
+    "Numeric-only IDs are protected in labelled fields and patient references, not every clinical number.",
+    "Timing samples do not guarantee identical cloud latency.",
+    "Physical mirror hardware and live participant services were not exercised."
+  ],
+  "final_changed_source_sha256": {
+    "maya/agents/health_rag/agent.py": "c8e839fd44f78120517cff0704f1e43d18198249039fa3dc52dababbd09f804c",
+    "maya/agents/phyxio_exercise_agent/agent.py": "c68dc3950de292de4bf92d01a3ded36a4c95376478a98fb5d74f77e48811f39e",
+    "maya/framework/conversation/responses.py": "af8138c1ced133e3131a821ab583877590d9f6123236eecd665a222765d363e2",
+    "maya/framework/integrations/biomarkers/__init__.py": "536c57b513fa5ec6e77f6ad91292b5de77b876260a9a4c6bb0a726f93fe89289",
+    "maya/framework/integrations/models.py": "97d9e661386289739b92e2ce7bbf558a9e60c33c1354a388751cccb970ba39cd",
+    "maya/framework/memory/ontology.py": "8f917a09f4d50e75d0173bbee1faa98529ef86348d1723a07e66baa9789931b1",
+    "maya/framework/supervisor/factory.py": "fec43ad733fc4d04fecd54836dd9ab7970b9725d09c41ee1caf50a552c7a6488",
+    "maya/framework/supervisor/state.py": "e0144ca85a715f115b2c6c9255eb55bf1292b58a0ecc8ab282c3b2e89782ae7c",
+    "maya/tests/live_health_config_scenarios.py": "1076f228cfc6f2849ec112027850a101a5aa32131571cf11cce69de54846993a",
+    "maya/tests/live_response_language_review.py": "8423a3d517eb22f3fcc4b4f6017c0bc8ceb4ee52d11fc58a76e71c7aab3ef9d6",
+    "maya/tests/live_supervisor_routing_scenarios.py": "90d04c59ea95720baa8d2c2159a543306aaf09de1be5c95ead61141c3c974018",
+    "maya/tests/test_health_rag_clarification.py": "0841549537e4e7a7e5ea01ac5ce054cc6e12d0ebbca001a6ba6d4144d7aba301",
+    "maya/tests/test_health_rag_config.py": "6a1069ebdceed077987cb40a1e9942dfec3acaa60ceef368251db080c41fa3e0",
+    "maya/tests/test_health_rag_retrieval.py": "52579ddbfdfe8aed236616b18b5b79aa8b0451de4f70631df3e46615e9d736f9",
+    "maya/tests/test_ontology_memory.py": "57e40eb0e6289fdfd3319ac001b15453f5b96525c550e60b1884823bd7fb186a",
+    "maya/tests/test_phyxio_offline_integration.py": "1b84e04278a3924b00b3ebff11485dc4fc8859e9d57ef04fe93eda1746005c87",
+    "maya/tests/test_phyxio_structured_decision.py": "f5d29f4fcc09813ea134985e8d8778a85a6c91cc523d59557b57a16f0b48ff9d",
+    "maya/tests/test_response_localization.py": "e71a12f1ecd24dae3721e1cc82ea6970a4e2e8c0ddd8af7bd2b36aa2047e0f2d",
+    "maya/tests/test_supervisor_memory.py": "ab78f01db61d32c683099c27b29904eaff0f1ba961c89150c36e25c27e2a99cd",
+    "system_test.py": "076e948d14d25894ac8341d315e5a3b3cd19213a2b6c1dee22cc6a558a0a4edd",
+    "system_test_workflows.py": "f5f01059be2376839d0016e9a1cacdc9fda3ac3548b0d20945f78067819f3e89",
+    "maya/framework/integrations/privacy.py": "958c2d360c8515828cc0ac3fd354b665301d97223cd8ab85136b315654dbaf56",
+    "maya/tests/model_stubs.py": "1db08329fe842f804f4cfe27606a96ecde41ce71289ae364fe83fce2e710bd66",
+    "maya/tests/test_privacy.py": "00730b9696e3f68c169bfdd07db9c4ee1c07da942ff55feb68e8c3959d0a248b"
+  },
+  "reproduction": {
+    "offline": "python system_test.py --suite offline",
+    "privacy_boundary": "python -m unittest maya.tests.test_privacy",
+    "live_suite_options": "python system_test.py --help",
+    "evidence_note": "Detailed run artifacts remain in the ignored output directory on the validation machine; this summary contains no credentials or participant transcripts."
+  }
+}

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import unittest
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+from maya.tests.model_stubs import model_call_stub
 
 from langchain.agents.middleware import ModelRequest
 from langchain_core.documents import Document
@@ -50,6 +52,9 @@ class StubRewriteModel:
 
 
 class RetrievalQueryTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch("maya.agents.health_rag.agent.model_call", side_effect=model_call_stub))
+
     def test_response_language_does_not_translate_machine_only_rewrite(self):
         model, retriever = StubRewriteModel('Clinical literature query'), StubRetriever()
         preferences = Preferences(response_language='ro')

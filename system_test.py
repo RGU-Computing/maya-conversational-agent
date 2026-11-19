@@ -91,7 +91,7 @@ OFFLINE_AREAS = {
     "Routing and tools": ["test_phyxio_offline_integration", "test_phyxio_structured_decision", "test_check_tools"],
     "Health and retrieval": ["test_health_rag_config", "test_health_rag_clarification", "test_health_rag_retrieval", "test_retrieval_progress"],
     "Memory and ontology": ["test_supervisor_memory", "test_ontology_memory", "test_ontology_runtime", "test_memory_inspector"],
-    "Measurements and identity": ["test_biomarkers", "test_fhir_biomarkers"],
+    "Measurements and identity": ["test_biomarkers", "test_fhir_biomarkers", "test_privacy"],
     "Exercise sessions": ["test_exercise_sessions", "test_phyxio_sessions"],
     "Language, presentation and voice": ["test_personalization", "test_response_presentation", "test_conversation_text", "test_runner_voice", "test_phyxio_voice", "test_models"],
 }
@@ -288,7 +288,7 @@ def language_review(rows, language, *, judge_model):
     """
     from langchain_core.messages import SystemMessage, HumanMessage
     from pydantic import BaseModel, Field
-    from maya.framework.integrations.models import get_chat_model
+    from maya.framework.integrations.models import get_chat_model, model_call
     class Finding(BaseModel):
         sample_id: str
         matches_language: bool
@@ -314,7 +314,7 @@ def language_review(rows, language, *, judge_model):
             os.environ[key] = value
     os.environ["AZURE_OPENAI_DEPLOYMENT"] = judge_model
     get_chat_model.cache_clear()
-    judge = get_chat_model().with_structured_output(Review, strict=True)
+    judge = model_call(get_chat_model(), Review, strict=True)
     results = []
     # Default-language and language-switch scenarios may differ from the job's
     # language. Keep each review batch under one target to avoid cross-sample drift.

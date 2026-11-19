@@ -154,10 +154,28 @@ class BiomarkerService:
         # another measurement's verified observations. Validation remains unchanged.
         return [*previous, *(fetch_latest_biomarkers.invoke({"measurement_ids": [key]}) for key in requested)]
 
+    @staticmethod
+    def model_results(results: list[dict]) -> list[dict]:
+        """Project verified observations for the model; retain raw records locally."""
+        clinical_fields = {"resourceType", "status", "code", "category", "effectiveDateTime",
+                           "effectivePeriod", "issued", "interpretation", "referenceRange",
+                           "bodySite", "method", "dataAbsentReason", "component"}
+
+        def clinical_result(value):
+            return {key: ([clinical_result(item) for item in child] if key == "component" else child)
+                    for key, child in value.items() if key in clinical_fields or key.startswith("value")}
+
+        return [{**result, "observations": [
+            {key: (clinical_result(value) if key == "result" and value.get("resourceType") == "Observation" else value)
+             for key, value in observation.items()
+             if key in {"measurement_id", "measured_at", "status", "result", "reference_range"}}
+            for observation in result.get("observations", [])]
+        } for result in results]
+
     def render_context(self, results: list[dict]) -> str:
         if not results:
             return ""
-        return self.config.context_instruction + "\nObservation lookup results:\n" + json.dumps(results)
+        return self.config.context_instruction + "\nObservation lookup results:\n" + json.dumps(self.model_results(results))
 
     def label_answer(self, text: str, results: list[dict], response_language: str | None = None) -> str:
         if self.config.synthetic_notice and any(result["synthetic"] and result["observations"] for result in results):
