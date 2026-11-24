@@ -7,20 +7,18 @@ from MAYA's auxiliary disambiguation policy and documents their delivery locatio
 
 ## Deployment versioning
 
-MAYA mirror deployment version **0.9** uses source commit
-[`2b653ee`](https://github.com/pedramsalimi/MAYA/commit/2b653ee42e3464e3398495e72292eefb1921c215),
-as recorded in D3.2 Annex A. The Python package version is `0.1.0`.
+Deployment tag [`v0.9`](https://github.com/pedramsalimi/MAYA/tree/v0.9) points to
+commit `2b653ee42e3464e3398495e72292eefb1921c215` (D3.2 Annex A). The Python package is `0.1.0`.
 
-From a clean deployment checkout, pin the source before following the setup below:
+Check out and verify the tag from a clean working tree.
 
 ```bash
-git fetch origin
-git switch --detach 2b653ee42e3464e3398495e72292eefb1921c215
+git fetch origin tag v0.9
+git switch --detach refs/tags/v0.9
 git rev-parse HEAD
 ```
 
-Record the deployment version and the commit printed by `git rev-parse HEAD`
-in the mirror's installation record.
+Record the tag and commit in the mirror installation record.
 
 ## Setup and mirror handover
 
