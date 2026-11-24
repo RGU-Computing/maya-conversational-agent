@@ -77,6 +77,8 @@ class ConfigurationTests(unittest.TestCase):
             {"user_id": "a", "preferences": {"tts_voice": " "}},
             {"user_id": "a", "preferences": {"asr_language": "English"}},
             {"user_id": "a", "preferences": {"voice": "typo"}},
+            {"user_id": "a", "preferences": {"emergency_contact": "call reception"}},
+            {"user_id": "a", "preferences": {"emergency_contact": 123}},
         ]:
             with self.subTest(payload=payload), self.assertRaises(ValidationError):
                 SessionConfig.model_validate(payload)

@@ -5,17 +5,21 @@ import json
 import os
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 
 from maya.tests.model_stubs import model_call_stub
 
+from langchain.agents.middleware import ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 
-from maya.framework.conversation.personalization import SessionConfig
+from maya.agents.health_rag.agent import health_rag_prompt
+from maya.agents.health_rag.config import EMERGENCY_CONTACT_MARKER, load_health_rag_config
+from maya.framework.conversation.personalization import SessionConfig, load_session
 
 
 class SupervisorMemoryTests(unittest.TestCase):
@@ -54,8 +58,9 @@ class SupervisorMemoryTests(unittest.TestCase):
         ontology.schedule.return_value = False
         self.enterContext(patch.object(self.factory, "OntologyMemoryService", return_value=ontology))
         self.enterContext(patch.object(self.factory, "get_postgres_memory", return_value=(self.store, InMemorySaver())))
-        exercise = RunnableLambda(Mock(side_effect=AssertionError("Unexpected exercise dispatch")), name="phyxio_exercise_agent")
-        self.enterContext(patch.object(self.factory, "_load_agents", return_value=([exercise], {})))
+        self.exercise = RunnableLambda(Mock(side_effect=AssertionError("Unexpected exercise dispatch")),
+                                      name="phyxio_exercise_agent")
+        self.enterContext(patch.object(self.factory, "_load_agents", return_value=([self.exercise], {})))
         self.graph = self.factory.build_supervisor()
         self.route("direct_answer")
 
@@ -91,6 +96,44 @@ class SupervisorMemoryTests(unittest.TestCase):
         prompt = self.guard.invoke.call_args.args[0][0].content
         self.assertIn(catalog, prompt)
         self.assertIn("writable binding", prompt)
+
+    def test_health_reply_only_inserts_the_onboarding_contact_for_urgent_turns(self):
+        health = Mock()
+        health.name = "health_rag"
+        health.config = load_health_rag_config()
+        health.cache_scope.return_value = "offline"
+        with patch.object(self.factory, "_load_agents", return_value=([health, self.exercise], {})):
+            graph = self.factory.build_supervisor()
+        self.route("health_rag")
+        contact = "+44 7700 900000"
+        guidance = "Please seek urgent professional help."
+        cases = [
+            (True, contact, f"{guidance} Call {EMERGENCY_CONTACT_MARKER}.", f"{guidance} Call {contact}."),
+            (True, contact, guidance, f"{guidance}\n\n{contact}"),
+            (True, None, guidance, guidance),
+            (False, contact, "General answer.", "General answer."),
+        ]
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "session.json"
+            for urgent, number, model_answer, expected in cases:
+                with self.subTest(urgent=urgent, contact_set=number is not None, model_answer=model_answer):
+                    path.write_text(json.dumps({"user_id": "test-participant", "preferences":
+                                                {} if number is None else {"emergency_contact": number}}))
+                    health.assess_clarification.return_value = self.factory.DisambiguationDecision(
+                        needs_clarification=False, urgent_safety_bypass=urgent,
+                    )
+                    health.agent.invoke.return_value = {"messages": [AIMessage(content=model_answer)]}
+                    result = graph.invoke({"messages": [HumanMessage(content="Health question")]},
+                                          load_session(path).graph_config())
+                    reply = result["messages"][-1]
+                    self.assertEqual(reply.content, expected)
+                    presentation = reply.additional_kwargs["presentation"]
+                    self.assertEqual(contact in presentation["display_text"], urgent and number is not None)
+                    self.assertEqual(contact in presentation["speech_text"], urgent and number is not None)
+                    state = health.agent.invoke.call_args.args[0]
+                    prompt = health_rag_prompt(ModelRequest(model=Mock(), messages=[], state=state), health.config)
+                    self.assertEqual(EMERGENCY_CONTACT_MARKER in prompt, urgent and number is not None)
+                    self.assertNotIn(contact, prompt)
 
     def test_saved_identity_is_forwarded_to_router_guard_and_reply_per_participant(self):
         profile = self.factory.Profile(name="Alice Example", location="York").model_dump()

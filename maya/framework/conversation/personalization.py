@@ -69,6 +69,10 @@ class Preferences(BaseModel):
         default="auto", pattern=r"^(auto|[a-z]{2})$",
         description="auto, or a Whisper-supported ISO 639-1 language code, e.g. en or es.",
     )
+    emergency_contact: str | None = Field(
+        default=None, pattern=r"^\+?[0-9](?:[ -]?[0-9]){2,14}$",
+        description="Pilot-approved emergency phone number for urgent guidance.",
+    )
 
     @field_validator("response_language")
     @classmethod

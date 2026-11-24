@@ -18,7 +18,7 @@ from maya.agents.health_rag.state import (
     HealthRagState, ClinicalSlotAssessment, PICOTAssessment, OntologyRuleCheck,
     DisambiguationDecision, ClarificationQuestion, RewrittenQuery,
 )
-from maya.agents.health_rag.config import HealthRagConfig, load_health_rag_config
+from maya.agents.health_rag.config import EMERGENCY_CONTACT_MARKER, HealthRagConfig, load_health_rag_config
 from maya.framework.integrations.models import get_chat_model, model_call
 from maya.framework.integrations.privacy import PrivacyMiddleware
 from maya.framework.conversation.responses import load_response_policy, localize_messages
@@ -270,10 +270,14 @@ def health_rag_prompt(request: ModelRequest, settings: HealthRagConfig | None = 
     conversation_context = str(request.state.get("conversation_context") or "").strip()
     ontology_context = str(request.state.get("ontology_context") or "").strip()
 
-    sections = [
-        settings.prompts.urgent_answer if request.state.get("urgent_safety_bypass") else settings.prompts.answer,
-        load_response_policy().health_output_instruction,
-    ]
+    instruction = settings.prompts.answer
+    if request.state.get("urgent_safety_bypass"):
+        contact_instruction = ""
+        if request.state.get("has_emergency_contact"):
+            contact_instruction = f"Give the configured emergency number as {EMERGENCY_CONTACT_MARKER}. Copy the marker exactly."
+        instruction = settings.prompts.urgent_answer.replace("{emergency_contact}", contact_instruction).rstrip()
+
+    sections = [instruction, load_response_policy().health_output_instruction]
     if conversation_context:
         sections.append(f"Recent health conversation context:\n{conversation_context}")
     if ontology_context:

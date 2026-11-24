@@ -5,6 +5,9 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 
+EMERGENCY_CONTACT_MARKER = "[EMERGENCY_CONTACT]"
+
+
 class ConfigSection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True,
                               str_strip_whitespace=True, str_min_length=1)

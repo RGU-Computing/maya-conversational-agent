@@ -15,6 +15,7 @@ from langgraph.store.base import BaseStore
 
 from maya.agents.config import load_agent_specs
 from maya.agents.health_rag.agent import ClarificationAssessmentError, DisambiguationDecision
+from maya.agents.health_rag.config import EMERGENCY_CONTACT_MARKER
 from maya.framework.integrations.biomarkers import BiomarkerRequest, load_biomarker_service
 from maya.framework.memory import get_postgres_memory   
 from maya.framework.memory.ontology import OntologyMemoryService, OntologyMemoryNotReady
@@ -632,6 +633,7 @@ def build_supervisor(*, biomarker_service=None):
                 "standalone_question": question,
                 "needs_query_rewrite": clarification_trace.get("status") == "clarified",
                 "urgent_safety_bypass": clarification_decision.urgent_safety_bypass,
+                "has_emergency_contact": preferences.emergency_contact is not None,
                 "response_style": preferences.response_style(),
                 "response_language": preferences.response_language,
             },
@@ -645,6 +647,12 @@ def build_supervisor(*, biomarker_service=None):
             str(answer_text or "").strip()
             or health_messages.no_evidence
         )
+        if clarification_decision.urgent_safety_bypass and preferences.emergency_contact:
+            contact = preferences.emergency_contact
+            if EMERGENCY_CONTACT_MARKER in summary_text:
+                summary_text = summary_text.replace(EMERGENCY_CONTACT_MARKER, contact)
+            else:
+                summary_text = f"{summary_text}\n\n{contact}"
         summary_stored = False
         if citations and answer_text and not biomarker_results:
             store.put(

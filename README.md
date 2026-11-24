@@ -418,6 +418,7 @@ FHIR patient mapping remains a separate service requirement.
 | `response_language` | Shared configuration, initially `en` | Generated user-facing text and clarification language; supported codes and full names are in `response_languages.json`. |
 | `tts_voice` | `en-GB-RyanNeural` | Azure Speech voice name. Both local and mirror audio use it. |
 | `asr_language` | `auto` | Whisper automatic detection, or a supported two-letter language code such as `en` or `es`. |
+| `emergency_contact` | Unset | Optional pilot-approved phone number for urgent replies. Set it in `session.json` as a string of 3–15 digits, with an optional leading `+` and spaces or hyphens between digits. MAYA inserts it in the reply locally. |
 
 Voice names and recognition languages must be supported by the deployed provider.
 The local validator checks their format, not remote availability. Recognition

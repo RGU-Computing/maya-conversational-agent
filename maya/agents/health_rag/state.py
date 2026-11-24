@@ -28,6 +28,7 @@ class HealthRagState(BaseAgentState):
     standalone_question: NotRequired[str]
     needs_query_rewrite: NotRequired[bool]
     urgent_safety_bypass: NotRequired[bool]
+    has_emergency_contact: NotRequired[bool]
     retrieval_used: NotRequired[bool]
     response_style: NotRequired[str]
     response_language: NotRequired[str]

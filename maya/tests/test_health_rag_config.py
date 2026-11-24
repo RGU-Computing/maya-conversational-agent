@@ -173,7 +173,9 @@ class HealthConfigTests(unittest.TestCase):
         self.assertFalse(update['retrieval_used'])
         self.assertNotIn('jump_to', update)
         prompt = agent.health_rag_prompt(ModelRequest(model=Mock(), messages=[], state=state), self.settings)
-        self.assertIn(self.settings.prompts.urgent_answer, prompt)
+        self.assertIn(self.settings.prompts.urgent_answer.split("{emergency_contact}")[0].rstrip(), prompt)
+        self.assertNotIn(agent.EMERGENCY_CONTACT_MARKER, prompt)
+        self.assertNotIn("{emergency_contact}", prompt)
         self.assertNotIn(self.settings.prompts.answer, prompt)
 
 
