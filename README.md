@@ -399,7 +399,8 @@ The payload is illustrated in [maya/session.example.json](maya/session.example.j
     "personality_id": "supportive",
     "response_language": "ro",
     "tts_voice": "en-GB-LibbyNeural",
-    "asr_language": "auto"
+    "asr_language": "auto",
+    "emergency_contact": null
   }
 }
 ```

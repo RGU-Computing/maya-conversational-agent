@@ -4,6 +4,7 @@
     "personality_id": "supportive",
     "response_language": "en",
     "tts_voice": "en-GB-LibbyNeural",
-    "asr_language": "auto"
+    "asr_language": "auto",
+    "emergency_contact": null
   }
 }
