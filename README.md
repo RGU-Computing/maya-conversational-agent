@@ -5,6 +5,23 @@ configuration locations and maintenance commands.
 The [ontology guide](docs/ONTOLOGY.md) distinguishes the main partner ontology
 from MAYA's auxiliary disambiguation policy and documents their delivery locations.
 
+## Deployment versioning
+
+MAYA mirror deployment version **0.9** uses source commit
+[`2b653ee`](https://github.com/pedramsalimi/MAYA/commit/2b653ee42e3464e3398495e72292eefb1921c215),
+as recorded in D3.2 Annex A. The Python package version is `0.1.0`.
+
+From a clean deployment checkout, pin the source before following the setup below:
+
+```bash
+git fetch origin
+git switch --detach 2b653ee42e3464e3398495e72292eefb1921c215
+git rev-parse HEAD
+```
+
+Record the deployment version and the commit printed by `git rev-parse HEAD`
+in the mirror's installation record.
+
 ## Setup and mirror handover
 
 For the complete identity/provider setup, live checks and troubleshooting commands,
