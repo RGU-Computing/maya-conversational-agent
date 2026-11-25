@@ -179,7 +179,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--thread-id",
-        help="Also show the latest LangGraph checkpoint for this thread.",
+        help="Look up a process-local checkpoint (unavailable from a separate runner process).",
     )
     parser.add_argument(
         "--limit",

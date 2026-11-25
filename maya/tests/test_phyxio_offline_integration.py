@@ -246,6 +246,8 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
         self.memory = memory
         self.enterContext(patch.object(self.factory, "OntologyMemoryService", return_value=memory))
         self.store = InMemoryStore(index={"embed": lambda texts: [[1.0, 0.0] for _ in texts], "dims": 2})
+        self.answer_cache = InMemoryStore(index={"embed": lambda texts: [[1.0, 0.0] for _ in texts], "dims": 2})
+        self.enterContext(patch.object(self.factory, "InMemoryStore", return_value=self.answer_cache))
         self.health = SimpleNamespace(
             name="health_rag", agent=Mock(),
             assess_clarification=Mock(return_value=DisambiguationDecision(needs_clarification=False)),
@@ -449,16 +451,16 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
             "type": "health_rag_summary", "user_question": "What is cardiovascular health?",
             "summary": "Other style answer", "citations": [],
         }
-        self.store.put(namespace, "legacy", value)
-        self.store.put(namespace, "other-style", {**value, "response_style": "v1:supportive"})
-        self.store.put(namespace, "older-style-version", {**value, "response_style": "v3:concise"})
+        self.answer_cache.put(namespace, "legacy", value)
+        self.answer_cache.put(namespace, "other-style", {**value, "response_style": "v1:supportive"})
+        self.answer_cache.put(namespace, "older-style-version", {**value, "response_style": "v3:concise"})
         self.run_turn("What is cardiovascular health?")
         self.health.agent.invoke.assert_called_once()
         # Remove the new exact entry; a matching style may still use semantic reuse.
-        for item in self.store.search(namespace):
+        for item in self.answer_cache.search(namespace):
             if item.key.startswith("summary:"):
-                self.store.delete(namespace, item.key)
-        self.store.put(namespace, "matching-style", {**value, "response_style": self.health.cache_scope(Preferences(personality_id="concise").response_style(), *self.memory.load_context.return_value), "summary": "Matching answer"})
+                self.answer_cache.delete(namespace, item.key)
+        self.answer_cache.put(namespace, "matching-style", {**value, "response_style": self.health.cache_scope(Preferences(personality_id="concise").response_style(), *self.memory.load_context.return_value), "summary": "Matching answer"})
         self.config = SessionConfig(user_id="offline-user", preferences=Preferences(personality_id="concise")).graph_config()
         result = self.run_turn("What is cardiovascular health?")
         self.health.agent.invoke.assert_called_once()
@@ -482,9 +484,9 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
                              preferences.response_style())
         namespace = ("health_rag", "a", "qa_history")
         # Leave only an English semantic candidate with a perfect synthetic score.
-        for item in self.store.search(namespace):
-            self.store.delete(namespace, item.key)
-        self.store.put(namespace, "english-only", {"type": "health_rag_summary", "summary": "English cached answer",
+        for item in self.answer_cache.search(namespace):
+            self.answer_cache.delete(namespace, item.key)
+        self.answer_cache.put(namespace, "english-only", {"type": "health_rag_summary", "summary": "English cached answer",
             "user_question": "What is cardiovascular health?", "citations": [],
             "response_style": self.health.cache_scope(Preferences(response_language="en").response_style(),
                                                       *self.memory.load_context.return_value)})
@@ -862,7 +864,8 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
         self.setup_biomarkers()
         question = "Explain my blood pressure."
         self.run_turn(question)
-        self.assertTrue(self.store.search(("health_rag", "participant-001", "qa_history")))
+        self.assertTrue(self.answer_cache.search(("health_rag", "participant-001", "qa_history")))
+        self.assertEqual(self.store.search(("health_rag", "participant-001", "qa_history")), [])
         self.router.invoke.return_value = self.factory.SupervisorRouteDecision(question_subject="current_user",
             route_type="health_rag", selected_ontology_models=["measurement_biomarker"],
             biomarker_request=self.lookup)

@@ -11,7 +11,7 @@ from typing import Dict, Tuple
 
 from langchain_core.embeddings import Embeddings
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.base import BaseStore
 from langgraph.store.postgres import PostgresStore
 
@@ -24,7 +24,6 @@ _STACK = ExitStack()
 atexit.register(_STACK.close)
 
 _STORE: BaseStore | None = None
-_CHECKPOINTER: BaseCheckpointSaver | None = None
 
 
 class DeterministicMemoryEmbeddings(Embeddings):
@@ -62,10 +61,10 @@ def _pool_config() -> Dict[str, int]:
 
 
 def get_postgres_memory() -> Tuple[BaseStore, BaseCheckpointSaver]:
-    """Return the shared Postgres-backed store and checkpointer."""
-    global _STORE, _CHECKPOINTER
+    """Return the durable fact store and a fresh, session-only checkpointer."""
+    global _STORE
 
-    if _STORE is None or _CHECKPOINTER is None:
+    if _STORE is None:
         conn = _connection_string()
         embeddings = DeterministicMemoryEmbeddings(size=1536)
         if conn:
@@ -83,10 +82,8 @@ def get_postgres_memory() -> Tuple[BaseStore, BaseCheckpointSaver]:
             )
 
             _STORE = _STACK.enter_context(store_cm)
-            _CHECKPOINTER = _STACK.enter_context(PostgresSaver.from_conn_string(conn))
             _STORE.setup()
-            _CHECKPOINTER.setup()
         else:
             raise RuntimeError("MAYA_DB_URI or DATABASE_URL must be set for memory persistence.")
 
-    return _STORE, _CHECKPOINTER
+    return _STORE, InMemorySaver()

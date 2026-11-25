@@ -135,6 +135,18 @@ class OntologyMemoryServiceTests(unittest.TestCase):
             register_shutdown=False,
         )
 
+    def test_new_session_shares_only_the_long_term_store(self):
+        from langgraph.checkpoint.memory import InMemorySaver
+        from maya.framework import memory
+
+        with patch.object(memory, "_STORE", self.store):
+            store, first = memory.get_postgres_memory()
+            next_store, second = memory.get_postgres_memory()
+        self.assertIs(store, next_store)
+        self.assertIsInstance(first, InMemorySaver)
+        self.assertIsInstance(second, InMemorySaver)
+        self.assertIsNot(first, second)
+
     def schedule(self, source_text: str, model_ids: list[str]) -> bool:
         return self.service.schedule(
             user_id="user-1",
@@ -148,7 +160,7 @@ class OntologyMemoryServiceTests(unittest.TestCase):
         return self.store.search(self.service.memory_namespace(user_id), limit=100)
 
     def pending(self) -> list[Any]:
-        return self.store.search(self.service.pending_namespace("user-1"), limit=100)
+        return self.service.pending_store.search(self.service.pending_namespace("user-1"), limit=100)
 
     def test_background_extraction_and_verification_keep_participant_privacy_context(self):
         evidence = "I take Bisoprolol 2.5 mg."
@@ -163,22 +175,16 @@ class OntologyMemoryServiceTests(unittest.TestCase):
         self.assertEqual(self.records("user-2"), [])
         self.assertEqual(identity, {"name": "Alice Example", "patient_id": "patient-1"})
 
-    def test_recovered_legacy_job_loads_only_its_participants_profile(self):
+    def test_legacy_raw_jobs_are_not_replayed(self):
         evidence = "I take Bisoprolol 2.5 mg."
-        self.store.put(("profile", "user-1"), "profile", {"name": "Alice Example", "location": "York"})
-        self.store.put(("profile", "user-2"), "profile", {"name": "Other Participant", "location": "Bath"})
         self.store.put(self.service.pending_namespace("user-1"), "legacy-job", {
             "type": "ontology_memory_job", "user_id": "user-1", "thread_id": "thread-1",
             "source_message_id": "message-1", "source_text": evidence,
             "selected_model_ids": ["clinical_profile"],
         })
-        self.extractor.responses.append([medication_record(evidence)])
         self.service.render_context(user_id="user-1", agent_id="health_rag", model_ids=["clinical_profile"])
-        for calls in (self.extractor.calls, self.verifier.calls):
-            self.assertEqual(calls[0][1]["configurable"]["privacy_context"],
-                             {"name": "Alice Example", "location": "York"})
-        self.assertEqual(len(self.records()), 1)
-        self.assertEqual(self.pending(), [])
+        self.assertEqual(self.extractor.calls, [])
+        self.assertEqual(self.records(), [])
 
     def test_loaded_context_uses_one_record_snapshot_and_preserves_user_isolation(self):
         evidence = 'I received doxorubicin chemotherapy.'
@@ -294,7 +300,8 @@ class OntologyMemoryServiceTests(unittest.TestCase):
         record = items[0].value["record"]
         self.assertEqual(record["properties"]["status"], "stopped")
         self.assertEqual(record["source_message_id"], "message-2")
-        self.assertEqual(record["evidence_text"], stopped)
+        self.assertNotIn("evidence_text", record)
+        self.assertNotIn(stopped, str(items[0].value))
 
     def test_cancer_treatment_uses_its_own_binding(self) -> None:
         evidence = "My chemotherapy included Doxorubicin."
@@ -423,47 +430,22 @@ class OntologyMemoryServiceTests(unittest.TestCase):
         self.assertEqual(len(self.records()), 1)
         self.assertEqual(self.pending(), [])
 
-    def test_restart_holds_only_relevant_pending_memory_until_verified(self):
+    def test_restart_discards_unverified_input(self):
         evidence = "My chemotherapy included Doxorubicin."
         self.extractor.error = TimeoutError("request timed out")
         with self.assertLogs("maya.framework.memory.ontology", level="WARNING"):
             self.schedule(evidence, ["cancer_history"])
 
-        class DeferredExecutor(Executor):
-            def __init__(self):
-                self.calls = []
-
-            def submit(self, fn, /, *args, **kwargs):
-                future = Future()
-                self.calls.append((fn, args, kwargs, future))
-                return future
-
-        executor = DeferredExecutor()
-        self.registry.runtime["memory_policy"]["recovery_wait_seconds"] = 0
+        self.assertEqual(len(self.pending()), 1)
+        self.assertEqual(self.store.search(self.service.pending_namespace("user-1")), [])
+        self.service.close()
+        self.assertEqual(self.pending(), [])
         restarted = OntologyMemoryService(
             model=object(), store=self.store, registry=self.registry,
-            extractor_factory=lambda model: self.extractor,
-            verifier_factory=lambda model: self.verifier,
-            executor=executor, register_shutdown=False)
-        with self.assertRaises(OntologyMemoryNotReady):
-            restarted.render_context(user_id="user-1", agent_id="health_rag", model_ids=["cancer_history"])
-        self.assertEqual(self.records(), [])
-        self.assertNotIn(evidence, restarted.render_context(
-            user_id="user-1", agent_id="health_rag", model_ids=["clinical_profile"]))
-        self.assertNotIn(evidence, restarted.render_context(
-            user_id="user-2", agent_id="health_rag", model_ids=["cancer_history"]))
-        with self.assertRaises(OntologyMemoryNotReady):
-            restarted.render_context(user_id="user-1", agent_id="health_rag", model_ids=["cancer_history"])
-        self.assertEqual(len(executor.calls), 1)
-
-        # Complete the original validation pipeline; pending context then disappears.
-        self.extractor.error = None
-        self.extractor.responses.append([treatment_record(evidence)])
-        fn, args, kwargs, future = executor.calls[0]
-        future.set_result(fn(*args, **kwargs))
+            executor=ImmediateExecutor(), register_shutdown=False)
         context = restarted.render_context(user_id="user-1", agent_id="health_rag", model_ids=["cancer_history"])
-        self.assertEqual(len(self.records()), 1)
-        self.assertIn("Doxorubicin", context)
+        self.assertNotIn(evidence, context)
+        self.assertEqual(self.records(), [])
 
     def test_recovery_keeps_rejected_statement_out_of_context(self):
         evidence = "My father takes Bisoprolol."

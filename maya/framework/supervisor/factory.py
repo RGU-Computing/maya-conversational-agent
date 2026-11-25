@@ -12,12 +12,13 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, Tool
 
 from langgraph.graph import StateGraph, END, START
 from langgraph.store.base import BaseStore
+from langgraph.store.memory import InMemoryStore
 
 from maya.agents.config import load_agent_specs
 from maya.agents.health_rag.agent import ClarificationAssessmentError, DisambiguationDecision
 from maya.agents.health_rag.config import EMERGENCY_CONTACT_MARKER
 from maya.framework.integrations.biomarkers import BiomarkerRequest, load_biomarker_service
-from maya.framework.memory import get_postgres_memory   
+from maya.framework.memory import DeterministicMemoryEmbeddings, get_postgres_memory
 from maya.framework.memory.ontology import OntologyMemoryService, OntologyMemoryNotReady
 from maya.framework.integrations.models import get_chat_model, model_call
 from maya.framework.integrations.privacy import privacy_config
@@ -365,7 +366,7 @@ def build_supervisor(*, biomarker_service=None):
                 if any(item.get("content") == memory.content for item in existing.values()):
                     continue
                 key = memory.memory_id or str(uuid.uuid4())
-                record = {"content": memory.content, "source_message_id": latest_user.id, "source_text": source_text}
+                record = {"content": memory.content, "source_message_id": latest_user.id}
                 store.put(namespace, key, record)
                 existing[key] = record
                 saved.append(record)
@@ -561,7 +562,7 @@ def build_supervisor(*, biomarker_service=None):
         summary_key = f"summary:{style_key}:{hashlib.sha256(normalized_query.encode('utf-8')).hexdigest()[:16]}"
 
         allow_cache = not biomarker_results and not clarification_decision.urgent_safety_bypass
-        exact_item = store.get(namespace, summary_key) if allow_cache else None
+        exact_item = answer_cache.get(namespace, summary_key) if allow_cache else None
         if exact_item is not None:
             value = getattr(exact_item, "value", {})
             if isinstance(value, dict) and value.get("summary"):
@@ -582,7 +583,7 @@ def build_supervisor(*, biomarker_service=None):
                     resolved_input=question,
                 )
 
-        semantic_items = [] if not allow_cache else store.search(
+        semantic_items = [] if not allow_cache else answer_cache.search(
             namespace, query=question,
             filter={"type": "health_rag_summary", "response_style": style_key}, limit=1,
         )
@@ -654,8 +655,8 @@ def build_supervisor(*, biomarker_service=None):
             else:
                 summary_text = f"{summary_text}\n\n{contact}"
         summary_stored = False
-        if citations and answer_text and not biomarker_results:
-            store.put(
+        if citations and answer_text and allow_cache:
+            answer_cache.put(
                 namespace,
                 summary_key,
                 {
@@ -668,7 +669,6 @@ def build_supervisor(*, biomarker_service=None):
                     "type": "health_rag_summary",
                     "response_style": style_key,
                 },
-                index=["query", "normalized_query", "summary"],
             )
             summary_stored = True
 
@@ -757,6 +757,9 @@ def build_supervisor(*, biomarker_service=None):
 
 
     store, checkpointer = get_postgres_memory()
+    answer_cache = InMemoryStore(index={
+        "dims": 1536, "embed": DeterministicMemoryEmbeddings(), "fields": ["user_question"],
+    })
     ontology_registry = get_ontology_registry()
     ontology_memory = OntologyMemoryService(model=model, store=store, registry=ontology_registry)
     agents, agent_descriptions = _load_agents()

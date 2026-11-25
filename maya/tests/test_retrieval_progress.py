@@ -132,13 +132,13 @@ class RetrievalProgressTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in self.tts.speak_text_async.call_args_list],
                          [self.status, "Final answer."])
 
-    def test_missing_tts_still_displays_status_and_answer(self):
+    def test_redirected_output_excludes_reply_text(self):
         self.tts = None
         self.app.stream.return_value = self.slow_stream(PROGRESS, ANSWER)
         self.run_main()
         output = "\n".join(str(c.args) for c in self.printed.call_args_list)
         self.assertIn(self.status, output)
-        self.assertIn("Final answer.", output)
+        self.assertNotIn("Final answer.", output)
 
     def test_graph_failure_joins_progress_and_does_not_speak_an_answer(self):
         finished = Event()

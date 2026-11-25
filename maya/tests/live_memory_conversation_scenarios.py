@@ -8,7 +8,6 @@ Rebuilds graphs and memory workers; does not exercise PostgreSQL, audio or ICE.
 import json
 import os
 from pathlib import Path
-from threading import Event
 from time import monotonic
 from unittest.mock import Mock, patch
 
@@ -79,9 +78,8 @@ def run(selected=()):
         other = f"{user}-other"
         biomarkers.config.patient_map.update({user: "synthetic-patient", other: "synthetic-patient"})
         services = []
-        release = Event()
 
-        def build(*, fail=False, block=False):
+        def build(*, fail=False):
             def memory_factory(**kwargs):
                 memory = OntologyMemoryService(**kwargs, register_shutdown=False)
                 original_factory = memory.extractor_factory
@@ -95,8 +93,6 @@ def run(selected=()):
                         if fail and not failed:
                             failed = True
                             raise TimeoutError("Injected first-save timeout")
-                        if block:
-                            assert release.wait(120), "Test recovery gate was not released"
                         return real.invoke(*args, **kw)
 
                     return Mock(invoke=invoke)
@@ -119,7 +115,7 @@ def run(selected=()):
                 lookup_count = fetch.call_count
             drain(memory)
             before = memory.load_records(user, ["cancer_history"])
-            pending = store.search(memory.pending_namespace(user))
+            pending = memory.pending_store.search(memory.pending_namespace(user))
             save(f"{name}_first_conversation", {
                 "asks_for_treatment": "treatment" in str(first["interrupts"]).lower(),
                 "fetches_once_across_resume": lookup_count == 1,
@@ -131,16 +127,15 @@ def run(selected=()):
                  pending_payloads=[item.value for item in pending])
 
             memory.close()
-            graph, memory = build(block=fail_save)
+            graph, memory = build()
             if fail_save:
-                _, waiting = ask(graph, user, QUESTION + " I have hypertension.")
-                save("recovery_waits_for_verification", {
-                    "reports_pending": waiting["metadata"].get("memory_status") == "pending",
-                    "does_not_repeat_clarification": not waiting["interrupts"],
-                    "does_not_retrieve": not waiting["metadata"].get("workflow_trace"),
-                    "preserves_current_turn_for_memory": waiting["memory_update_status"] == "scheduled",
-                }, waiting=waiting)
-                release.set()
+                config, fresh = ask(graph, user)
+                save("restart_discards_unverified_input", {
+                    "asks_for_treatment": bool(fresh["interrupts"]),
+                    "no_durable_job": not store.search(memory.pending_namespace(user)),
+                    "no_unverified_record": not memory.load_records(user, ["cancer_history"]),
+                }, fresh=fresh)
+                turn(graph, config, Command(resume=REPLY))
                 drain(memory)
 
             _, recalled = ask(graph, user)
@@ -152,9 +147,7 @@ def run(selected=()):
                 "answers_with_references": bool(recalled["metadata"].get("presentation", {}).get("references")),
                 "verified_treatment_saved": any(r["binding_path"] == "cancer_history.treatment_records"
                     and "doxorubicin" in json.dumps(r["properties"]).lower() for r in records),
-                "pending_queue_drained": not store.search(memory.pending_namespace(user)),
-                "new_assertion_retained": not fail_save or any(r["binding_path"] == "clinical_profile.condition_records"
-                    and "hypertension" in json.dumps(r["properties"]).lower() for r in records),
+                "pending_queue_drained": not memory.pending_store.search(memory.pending_namespace(user)),
             }, recalled=recalled, records=records)
 
             _, isolated = ask(graph, other)
@@ -164,7 +157,6 @@ def run(selected=()):
                 "no_inherited_records": not memory.load_records(other, ["cancer_history", "clinical_profile"]),
             }, result=isolated)
         finally:
-            release.set()
             for memory in services:
                 memory.close()
 

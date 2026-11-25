@@ -20,6 +20,7 @@ import sounddevice as sd
 import soundfile as sf
 import webrtcvad
 from dotenv import load_dotenv
+from langsmith.utils import tracing_is_enabled
 from openai import APIError, BadRequestError
 import azure.cognitiveservices.speech as speechsdk
 from langgraph.types import Command
@@ -69,7 +70,7 @@ def speak(tts: speechsdk.SpeechSynthesizer | None, text: str) -> None:
             sd.play(data, rate)
             sd.wait()
     except Exception as tts_err:
-        print(f"[tts] {tts_err}")
+        print(f"[tts] {type(tts_err).__name__}")
 
 
 def init_phyxio_io(session: SessionConfig):
@@ -82,7 +83,7 @@ def init_phyxio_io(session: SessionConfig):
     except ValueError:
         raise
     except Exception as phyxio_err:
-        print(f"[phyxio] disabled: {phyxio_err}")
+        print(f"[phyxio] disabled: {type(phyxio_err).__name__}")
         return None
 
 
@@ -93,7 +94,7 @@ def speak_phyxio(phyxio_io, text: str, *, speech_text: str | None = None) -> Non
         phyxio_io.show_text(text)
         phyxio_io.speak_text(text if speech_text is None else speech_text)
     except Exception as phyxio_err:
-        print(f"[phyxio][tts] {phyxio_err}")
+        print(f"[phyxio][tts] {type(phyxio_err).__name__}")
 
 
 def set_phyxio_state(phyxio_io, state: str) -> None:
@@ -104,7 +105,7 @@ def set_phyxio_state(phyxio_io, state: str) -> None:
         if callable(set_state):
             set_state(state)
     except Exception as phyxio_err:
-        print(f"[phyxio][state] {phyxio_err}")
+        print(f"[phyxio][state] {type(phyxio_err).__name__}")
 
 
 def end_phyxio_interaction(phyxio_io, delay_seconds: float = PHYXIO_END_INTERACTION_DELAY) -> None:
@@ -115,7 +116,7 @@ def end_phyxio_interaction(phyxio_io, delay_seconds: float = PHYXIO_END_INTERACT
         if callable(end_interaction):
             end_interaction(delay_seconds)
     except Exception as phyxio_err:
-        print(f"[phyxio][end_interaction] {phyxio_err}")
+        print(f"[phyxio][end_interaction] {type(phyxio_err).__name__}")
 
 
 def speak_output(
@@ -132,6 +133,11 @@ def speak_output(
             end_phyxio_interaction(phyxio_io)
     else:
         speak(tts, text if speech_text is None else speech_text)
+
+
+def _interactive_output() -> bool:
+    isatty = getattr(sys.stdout, "isatty", None)
+    return bool(isatty and isatty())
 
 
 def read_text(
@@ -237,7 +243,8 @@ def read_text(
 
     while True:
         if phyxio_io is not None:
-            print(input_prompt, end="", flush=True)
+            if _interactive_output():
+                print(input_prompt, end="", flush=True)
             while True:
                 try:
                     mirror_text = phyxio_io.asr_queue.get_nowait()
@@ -248,7 +255,6 @@ def read_text(
                 if isinstance(mirror_text, str) and mirror_text.strip():
                     spoken = mirror_text.strip()
                     print()
-                    print(f"You (phyxio): {spoken}")
                     return spoken
                 
                 if not sys.stdin.isatty():
@@ -267,7 +273,7 @@ def read_text(
                     break
         else:
             try:
-                user_input = input(input_prompt).strip()
+                user_input = input(input_prompt if _interactive_output() else "").strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 return None
@@ -294,7 +300,6 @@ def read_text(
             if not spoken_text:
                 print("No speech detected. Try again.")
                 continue
-            print(f"You (voice): {spoken_text}")
             return spoken_text
 
         if user_input:
@@ -452,6 +457,8 @@ def build_supervisor():
 
 
 def main(session: SessionConfig | None = None) -> None:
+    if tracing_is_enabled():
+        raise RuntimeError("Disable LangSmith tracing before starting a participant session.")
     session = session or load_session()
     os.chdir(ROOT)
     lock_file = acquire_single_instance_lock()
@@ -562,7 +569,8 @@ def main(session: SessionConfig | None = None) -> None:
                 break
 
         if final_text:
-            print(f"\n***************\n\nMAYA: {final_text.display_text}")
+            if _interactive_output():
+                print(f"\n***************\n\nMAYA: {final_text.display_text}")
             speak_output(tts, phyxio_io, final_text.display_text,
                          speech_text=final_text.speech_text, end_interaction=True)
 

@@ -46,7 +46,7 @@ latest_user_message only. Existing memories are context, not new assertions.
 Return memories=[] when no new fact is explicitly asserted by the current user.
 Do not save questions, hypothetical or quoted examples, facts about another person, or anything the user asks you not to save.
 Never infer an answer from a question. For a mixed question and assertion, extract only
-the assertion. Preserve its meaning, subject, negation, timing and uncertainty. Use an existing memory_id
+a concise account of the relevant fact and omit unrelated conversation. Preserve its meaning, subject, negation, timing and uncertainty. Use an existing memory_id
 only for a correction of that memory; otherwise use null. Do not duplicate unchanged facts.
 System Time: {time}"""
 

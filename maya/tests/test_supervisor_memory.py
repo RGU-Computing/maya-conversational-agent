@@ -209,11 +209,12 @@ class SupervisorMemoryTests(unittest.TestCase):
         self.route("general_memory")
         self.memory_extractor.invoke.return_value = self.factory.MemoryUpdate(memories=[
             self.factory.Memory(content=source)])
-        self.turn(source, language="fi")
+        self.turn(source + " Unrelated fixture detail.", language="fi")
         record = next(iter(self.records().values()))
         self.assertEqual(record["source_message_id"], "current-message")
         self.assertEqual(record["content"], source)
-        self.assertEqual(record["source_text"], source)
+        self.assertNotIn("source_text", record)
+        self.assertNotIn("Unrelated fixture detail", str(record))
         messages = self.model.invoke.call_args.args[0]
         self.assertIn("Finnish", messages[0].content)
         self.assertEqual(json.loads(messages[-1].content)["saved_this_turn"], [record])

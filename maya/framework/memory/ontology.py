@@ -12,6 +12,7 @@ from typing import Any, Callable, Sequence
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.store.base import BaseStore
+from langgraph.store.memory import InMemoryStore
 from pydantic import BaseModel, Field
 
 from maya.framework.ontology.registry import OntologyRegistry
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class OntologyMemoryNotReady(RuntimeError):
-    """Relevant persisted input has not completed ontology verification yet."""
+    """Relevant session input has not completed ontology verification yet."""
 
 
 class OntologyMemoryRecord(BaseModel):
@@ -108,6 +109,7 @@ class OntologyMemoryService:
     ):
         self.model = model
         self.store = store
+        self.pending_store = InMemoryStore()
         self.registry = registry
         self.extractor_factory = extractor_factory
         self.verifier_factory = verifier_factory
@@ -195,7 +197,7 @@ class OntologyMemoryService:
 
     def _relevant_pending(self, user_id: str, model_ids: Sequence[str]) -> list[Any]:
         selected = set(model_ids)
-        return [item for item in self.store.search(
+        return [item for item in self.pending_store.search(
             self.pending_namespace(user_id), filter={"type": "ontology_memory_job", "user_id": user_id},
             limit=self.registry.runtime["memory_policy"]["pending_job_limit"],
         ) if set(item.value.get("selected_model_ids") or []) & selected]
@@ -210,7 +212,7 @@ class OntologyMemoryService:
         model_ids: Sequence[str],
         privacy_context: dict | None = None,
     ) -> bool:
-        """Persist a small pending job and return without waiting for its LLM work."""
+        """Queue a session-only pending job and return without waiting for its LLM work."""
 
         selected = self.registry.resolve_model_ids(model_ids)
         selected = [model_id for model_id in selected if self.registry.has_active_bindings([model_id])]
@@ -228,7 +230,7 @@ class OntologyMemoryService:
             "selected_model_ids": selected,
             "privacy_context": dict(privacy_context or {}),
         }
-        self.store.put(self.pending_namespace(user_id), job_key, payload, index=False)
+        self.pending_store.put(self.pending_namespace(user_id), job_key, payload, index=False)
         self._submit(job_key, payload)
         return True
 
@@ -242,7 +244,7 @@ class OntologyMemoryService:
             if user_id in self._recovered_users:
                 return
             self._recovered_users.add(user_id)
-        for item in self.store.search(
+        for item in self.pending_store.search(
             self.pending_namespace(user_id), limit=self.registry.runtime["memory_policy"]["pending_job_limit"],
         ):
             if isinstance(item.value, dict) and item.value.get("type") == "ontology_memory_job":
@@ -266,7 +268,7 @@ class OntologyMemoryService:
                 self._recovered_users.discard(scheduled_key[0])
             self._condition.notify_all()
         if error is not None:
-            logger.warning("Ontology memory background update failed: %s", error)
+            logger.warning("Ontology memory background update failed: %s", type(error).__name__)
 
     def _extractor(self, model_ids: Sequence[str]) -> Any:
         key = tuple(model_ids)
@@ -372,11 +374,11 @@ class OntologyMemoryService:
             if not isinstance(raw_record, dict) or raw_record.get("model_id") not in model_ids:
                 continue
             try:
-                record = OntologyMemoryRecord.model_validate(raw_record)
+                record = OntologyMemoryRecord.model_validate({**raw_record, "evidence_text": ""})
                 existing.append(
                     {
                         "record_id": item.key,
-                        "record": record.model_dump(mode="json"),
+                        "record": record.model_dump(mode="json", exclude={"evidence_text"}),
                     }
                 )
             except ValueError:
@@ -448,6 +450,7 @@ class OntologyMemoryService:
                 continue
 
             key = _record_key(self.registry, raw)
+            del raw["evidence_text"]
             search_text = _search_text(raw)
             self.store.put(
                 namespace,
@@ -463,7 +466,7 @@ class OntologyMemoryService:
             )
             writes += 1
 
-        self.store.delete(self.pending_namespace(user_id), job_key)
+        self.pending_store.delete(self.pending_namespace(user_id), job_key)
         return writes
 
     def close(self) -> None:
@@ -473,6 +476,7 @@ class OntologyMemoryService:
             self._closed = True
         if self._owns_executor:
             self.executor.shutdown(wait=True, cancel_futures=False)
+        self.pending_store = InMemoryStore()
 
 
 def _job_key(thread_id: str, source_message_id: str, source_text: str) -> str:
@@ -511,7 +515,6 @@ def _search_text(record: dict[str, Any]) -> str:
             str(record.get("model_id") or ""),
             str(record.get("binding_path") or ""),
             properties,
-            str(record.get("evidence_text") or ""),
         ]
         if part
     )

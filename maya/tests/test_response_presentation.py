@@ -120,6 +120,7 @@ class ResponsePresentationTests(unittest.TestCase):
         self.assertEqual(interrupts, [interrupt])
 
     def test_main_waits_for_user_before_speaking_and_prints_full_health_reply(self):
+        self.enterContext(patch.object(runner, "_interactive_output", return_value=True))
         presentation = health_presentation("Helpful answer.", self.citations)
         reply = response_text("Helpful answer.", {"presentation": presentation})
         events = []

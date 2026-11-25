@@ -7,14 +7,13 @@ from MAYA's auxiliary disambiguation policy and documents their delivery locatio
 
 ## Deployment versioning
 
-Deployment tag [`v0.9`](https://github.com/pedramsalimi/MAYA/tree/v0.9) points to
-commit `2b653ee42e3464e3398495e72292eefb1921c215` (D3.2 Annex A). The Python package is `0.1.0`.
+Package and deployment version [0.9.0](https://github.com/RGU-Computing/maya-conversational-agent/tree/v0.9.0) include the study retention changes. The earlier `v0.9` tag identifies the historical mirror build.
 
 Check out and verify the tag from a clean working tree.
 
 ```bash
-git fetch origin tag v0.9
-git switch --detach refs/tags/v0.9
+git fetch origin tag v0.9.0
+git switch --detach refs/tags/v0.9.0
 git rev-parse HEAD
 ```
 
@@ -495,11 +494,7 @@ Settings remain fixed for that process. UCLM must stop it on logout and start a
 new process with the next participant's payload; editing the file does not switch
 an active session. No HTTP endpoint or new preference database is introduced.
 
-Each launch creates a fresh conversation thread while retaining memory under
-`user_id`. The optional development override `MAYA_RUN_THREAD_ID` resumes a thread
-label scoped to that participant; checkpoint IDs now encode `[user_id, label]`,
-so old unscoped checkpoint IDs are not resumed. Existing long-term memory is
-unchanged.
+Each runner launch creates a fresh conversation in RAM. A thread can resume a clarification within that session. Ending the process releases the dialogue, reply cache and unfinished memory inputs, even if the next launch uses the same participant and thread label. PostgreSQL retains verified general memories, supported profile fields and validated ontology facts, with source identifiers where needed. Source messages and evidence quotes are used during verification in RAM. Run study sessions with provider tracing disabled and without transcript capture. Review any data and backups created by older releases separately.
 
 Personality instructions affect generated replies and clarification wording in
 the supervisor, health and exercise agents. They add no model calls and retain the
@@ -546,7 +541,7 @@ is configurable as `clarification_unavailable_text` in the response policy.
 These checks make the decision auditable; they do not certify model judgements
 or clinical correctness.
 
-Loading ontology context also starts background recovery of pending memory jobs.
+Loading ontology context retries pending memory jobs within the running session.
 For relevant updates belonging to the same user, context loading waits up to
 `recovery_wait_seconds` (supplied value: 2 seconds). If verification is still
 pending or failed again, MAYA returns `recovery_unavailable_text` rather than
@@ -645,7 +640,7 @@ safety responses take their own path and do not depend on retrieved documents.
 Background memory verification checks coverage for every proposed record and
 property. An incomplete result gets one retry for the omitted records using the
 same ontology policy; if it remains incomplete, the existing pending job is kept
-for recovery. A complete semantic rejection is not retried or treated as approval.
+for another attempt within the session. A complete semantic rejection is not retried or treated as approval.
 
 Answer reuse includes a fingerprint of the HealthRAG configuration, disambiguation
 ontology, rendered ontology/profile context, record context supplied to retrieval,
@@ -706,8 +701,7 @@ still need their own validation.
 ## Inspecting Memory
 
 The memory inspector provides a read-only JSON view of the users, namespaces,
-stored values, and optional LangGraph thread checkpoints in the configured
-PostgreSQL database.
+stored values in the configured PostgreSQL database. A separate inspector process cannot see a running session’s RAM checkpoints.
 
 ```bash
 # Discover user IDs and their memory namespaces.
@@ -722,10 +716,6 @@ python -m maya.cli.inspect_memory \
   --namespace profile \
   --namespace ontology
 
-# Include the latest checkpoint for a LangGraph conversation thread.
-python -m maya.cli.inspect_memory \
-  --user-id test1 \
-  --thread-id YOUR_THREAD_ID
 ```
 
 Long strings are shortened to 500 characters by default to keep demonstrations

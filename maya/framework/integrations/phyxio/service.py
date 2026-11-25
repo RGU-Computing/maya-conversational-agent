@@ -250,9 +250,9 @@ class PhyxioService:
             if not text and not self._cancel_recording.is_set():
                 self._user_set_text("No speech detected. Tap and try again.")
 
-        except Exception:
+        except Exception as err:
             text = ""
-            log.exception("ASR failed")
+            log.error("ASR failed: %s", type(err).__name__)
             if not self._cancel_recording.is_set():
                 self._user_set_text(self.voice.error_text)
         finally:
@@ -261,7 +261,7 @@ class PhyxioService:
                     self._ui_off()
                     # Commit delivery and finish cleanup atomically with taps.
                     if text and not self._cancel_recording.is_set():
-                        log.info("[ASR] %r", text)
+                        log.info("[ASR] Speech recognised")
                         self._user_set_text(text)
                         self.asr_queue.put(text)
                     elif not self._tts_running.is_set() and self._tts_queue.empty():
@@ -415,8 +415,8 @@ class PhyxioService:
                 data, rate = sf.read(BytesIO(audio), dtype="float32")
                 sd.play(data, rate)
                 sd.wait()
-            except Exception:
-                log.exception("TTS failed")
+            except Exception as err:
+                log.error("TTS failed: %s", type(err).__name__)
             finally:
                 with self._lock:
                     self._tts_running.clear()
@@ -442,7 +442,7 @@ class PhyxioService:
             method(*args)
             return True
         except Exception as err:
-            log.warning("UI call %s failed: %s", method_name, err)
+            log.warning("UI call %s failed: %s", method_name, type(err).__name__)
             return False
 
     def _start_interaction(self) -> None:

@@ -188,10 +188,7 @@ def run(selected=(), *, service=None):
             for name, rewriter in [('timeout', StubRewriteModel(error=TimeoutError('Injected rewrite timeout'))),
                                    ('empty', StubRewriteModel(' '))]:
                 # Each fault must reach retrieval rather than reuse the previous answer.
-                namespace = ('health_rag', user, 'qa_history')
-                for item in store.search(namespace):
-                    store.delete(namespace, item.key)
-                result = turn(graph, SessionConfig(user_id=user).graph_config(),
+                result = turn(build(), SessionConfig(user_id=user).graph_config(),
                               {'messages': [HumanMessage(content=question)]}, rewrite_model=rewriter)
                 query = result['metadata'].get('workflow_trace', [{}])[0].get('retrieval_query', '')
                 cases.append({'fault': name, 'result': result, 'checks': {
