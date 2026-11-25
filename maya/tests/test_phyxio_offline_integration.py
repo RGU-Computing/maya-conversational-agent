@@ -454,17 +454,43 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
         self.answer_cache.put(namespace, "legacy", value)
         self.answer_cache.put(namespace, "other-style", {**value, "response_style": "v1:supportive"})
         self.answer_cache.put(namespace, "older-style-version", {**value, "response_style": "v3:concise"})
-        self.run_turn("What is cardiovascular health?")
+        fresh = self.run_turn("What is cardiovascular health?")
         self.health.agent.invoke.assert_called_once()
-        # Remove the new exact entry; a matching style may still use semantic reuse.
-        for item in self.answer_cache.search(namespace):
-            if item.key.startswith("summary:"):
-                self.answer_cache.delete(namespace, item.key)
+        # A similar question can still reuse a reply with the matching style.
+        fresh_key = fresh["messages"][-1].additional_kwargs["workflow_trace"][0]["memory_key"]
+        self.answer_cache.delete(namespace, fresh_key)
         self.answer_cache.put(namespace, "matching-style", {**value, "response_style": self.health.cache_scope(Preferences(personality_id="concise").response_style(), *self.memory.load_context.return_value), "summary": "Matching answer"})
         self.config = SessionConfig(user_id="offline-user", preferences=Preferences(personality_id="concise")).graph_config()
-        result = self.run_turn("What is cardiovascular health?")
+        result = self.run_turn("Explain what is cardiovascular health?")
         self.health.agent.invoke.assert_called_once()
         self.assertIn("Matching answer", result["messages"][-1].content)
+
+    def test_saved_reply_survives_a_new_graph_without_saving_conversation(self):
+        self.router.invoke.return_value = self.factory.SupervisorRouteDecision(
+            question_subject="current_user", route_type="health_rag", selected_ontology_models=[])
+        question = "What is cardiovascular health?"
+        self.run_turn(question)
+        self.run_turn("Could you explain that briefly?")
+        self.assertIn(question, self.health.agent.invoke.call_args.args[0]["conversation_context"])
+        namespace = ("health_rag", "offline-user", "qa_history")
+        records = self.store.search(namespace)
+        self.assertEqual(len(records), 2)
+        for record in records:
+            self.assertEqual(record.value, {
+                "summary": "Evidence-based fixture answer.",
+                "citations": self.health.agent.invoke.return_value["citations"],
+            })
+
+        with patch.object(self.factory, "InMemoryStore", return_value=InMemoryStore()), \
+                patch.object(self.factory, "get_postgres_memory", return_value=(self.store, InMemorySaver())):
+            self.graph = self.factory.build_supervisor()
+        result = self.run_turn(question)
+        self.assertEqual(self.health.agent.invoke.call_count, 2)
+        self.assertEqual([message.content for message in result["messages"] if isinstance(message, HumanMessage)],
+                         [question])
+        reply = result["messages"][-1]
+        self.assertEqual(reply.additional_kwargs["workflow_trace"][0]["memory_lookup"], "exact")
+        self.assertEqual(len(reply.additional_kwargs["presentation"]["references"]), 3)
 
     def test_language_change_preserves_identity_and_isolates_exact_and_semantic_cache(self):
         from maya.framework.conversation import responses
@@ -491,7 +517,7 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
             "response_style": self.health.cache_scope(Preferences(response_language="en").response_style(),
                                                       *self.memory.load_context.return_value)})
         self.config = SessionConfig(user_id="a", preferences=Preferences(response_language="ro")).graph_config()
-        self.run_turn("What is cardiovascular health?")
+        self.run_turn("Explain what is cardiovascular health?")
         self.assertEqual(self.health.agent.invoke.call_count, 4)
 
     def test_language_is_forwarded_to_exercise_but_not_machine_routing(self):
@@ -865,7 +891,7 @@ class SupervisorExerciseIntegrationTests(unittest.TestCase):
         question = "Explain my blood pressure."
         self.run_turn(question)
         self.assertTrue(self.answer_cache.search(("health_rag", "participant-001", "qa_history")))
-        self.assertEqual(self.store.search(("health_rag", "participant-001", "qa_history")), [])
+        self.assertEqual(len(self.store.search(("health_rag", "participant-001", "qa_history"))), 1)
         self.router.invoke.return_value = self.factory.SupervisorRouteDecision(question_subject="current_user",
             route_type="health_rag", selected_ontology_models=["measurement_biomarker"],
             biomarker_request=self.lookup)

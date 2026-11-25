@@ -494,7 +494,7 @@ Settings remain fixed for that process. UCLM must stop it on logout and start a
 new process with the next participant's payload; editing the file does not switch
 an active session. No HTTP endpoint or new preference database is introduced.
 
-Each runner launch creates a fresh conversation in RAM. A thread can resume a clarification within that session. Ending the process releases the dialogue, reply cache and unfinished memory inputs, even if the next launch uses the same participant and thread label. PostgreSQL retains verified general memories, supported profile fields and validated ontology facts, with source identifiers where needed. Source messages and evidence quotes are used during verification in RAM. Run study sessions with provider tracing disabled and without transcript capture. Review any data and backups created by older releases separately.
+Each runner launch creates a fresh conversation in RAM. A thread can resume a clarification within that session. Ending the process releases the dialogue, unfinished memory inputs and the in-session search for similar questions. PostgreSQL retains verified general memories, supported profile fields, validated ontology facts, and eligible final HealthRAG replies with their citations. HealthRAG uses a hash to look up saved replies across sessions. It keeps the question and recent dialogue in RAM. Run study sessions with provider tracing disabled and without transcript capture. Review any data and backups created by older releases separately.
 
 Personality instructions affect generated replies and clarification wording in
 the supervisor, health and exercise agents. They add no model calls and retain the
@@ -642,13 +642,12 @@ property. An incomplete result gets one retry for the omitted records using the
 same ontology policy; if it remains incomplete, the existing pending job is kept
 for another attempt within the session. A complete semantic rejection is not retried or treated as approval.
 
-Answer reuse includes a fingerprint of the HealthRAG configuration, disambiguation
-ontology, rendered ontology/profile context, record context supplied to retrieval,
-response style and output instruction.
-Changing those inputs prevents reuse of answers generated under the old settings.
-Reference headings and the disclaimer are rendered from the current policy on
-every delivery, including cached answers. This is not a corpus-update invalidation
-mechanism; corpus/index changes still require managing the answer cache separately.
+Answer reuse includes a fingerprint of the HealthRAG instructions, relevant
+ontology and participant records, response style, and the configured literature
+and passage snapshot. Restart MAYA after rebuilding the index so it uses the
+updated snapshot. Urgent replies and turns with measurement lookup results bypass
+the cache. Reference headings and the disclaimer use the current policy on
+every delivery, including cached answers.
 
 Run the offline regression suite with
 `.venv/bin/python -m unittest discover -s maya/tests -p 'test_*.py'`.

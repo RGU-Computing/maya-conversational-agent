@@ -75,7 +75,10 @@ class HealthConfigTests(unittest.TestCase):
         with TemporaryDirectory() as folder:
             path = Path(folder) / 'health.json'
             path.write_text(settings.model_dump_json())
-            with patch.object(agent, 'load_rag_vector_config', return_value=SimpleNamespace(backend='pgvector')), \
+            vector_config = SimpleNamespace(
+                backend='pgvector', collection_name='test', embedding_backend='deterministic', embedding_model='test',
+            )
+            with patch.object(agent, 'load_rag_vector_config', return_value=vector_config), \
                     patch.object(agent, 'load_chunk_snapshot', return_value=[]), \
                     patch.object(agent, 'build_embeddings'), \
                     patch.object(agent, 'build_vector_store', return_value=store), \
@@ -144,6 +147,7 @@ class HealthConfigTests(unittest.TestCase):
                 update={field: getattr(self.settings.prompts, field) + ' Changed.'})})
             self.assertNotEqual(original, replace(handle, config=config).cache_scope('supportive', 'User record'))
         self.assertNotEqual(original, replace(handle, ontology_block='New ontology').cache_scope('supportive', 'User record'))
+        self.assertNotEqual(original, replace(handle, literature_revision='Updated').cache_scope('supportive', 'User record'))
         self.assertNotEqual(original, handle.cache_scope('concise', 'User record'))
         self.assertNotEqual(original, handle.cache_scope('supportive', 'Changed record'))
 

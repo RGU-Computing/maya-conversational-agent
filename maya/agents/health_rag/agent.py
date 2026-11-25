@@ -304,11 +304,12 @@ class HealthRagHandle:
     ontology_entity_ids: frozenset[str] = frozenset()
     ontology_rule_counts: dict[str, int] = field(default_factory=dict)
     config: HealthRagConfig = field(default_factory=load_health_rag_config)
+    literature_revision: str = ""
 
     def cache_scope(self, response_style: str, ontology_context: str, ontology_memory_context: str = "") -> str:
-        """Reuse answers only under the same instructions, style and ontology records."""
+        """Reuse answers under the same instructions, context and literature."""
         content = [self.config.model_dump(), self.ontology_block, ontology_context,
-                   response_style, load_response_policy().health_output_instruction]
+                   response_style, load_response_policy().health_output_instruction, self.literature_revision]
         if ontology_memory_context:
             # Exclude summaries created before records were supplied to retrieval.
             content.append(ontology_memory_context)
@@ -446,6 +447,14 @@ def build(spec: dict[str, Any] | None = None) -> HealthRagHandle:
     if not documents and vector_config.backend != "pgvector":
         raise RuntimeError(f"No local health literature found under {corpus_root(root_dir)}.")
 
+    literature_revision = hashlib.sha256(json.dumps([
+        vector_config.backend, vector_config.collection_name, vector_config.embedding_backend, vector_config.embedding_model,
+    ]).encode("utf-8"))
+    for document in documents:
+        literature_revision.update(json.dumps(
+            [document.page_content, document.metadata], sort_keys=True,
+        ).encode("utf-8"))
+
     embeddings = build_embeddings(vector_config)
     vector_store = build_vector_store(vector_config, embeddings, pre_delete=False)
     if vector_config.backend == "in_memory" and documents:
@@ -474,6 +483,7 @@ def build(spec: dict[str, Any] | None = None) -> HealthRagHandle:
         name=AGENT_ID,
         agent=agent,
         config=settings,
+        literature_revision=literature_revision.hexdigest(),
         ontology_entity_ids=frozenset(
             str(entity.get("concept_id") or "")
             for entity in (ontology.get("entities") or [])

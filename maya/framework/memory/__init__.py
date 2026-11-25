@@ -61,7 +61,7 @@ def _pool_config() -> Dict[str, int]:
 
 
 def get_postgres_memory() -> Tuple[BaseStore, BaseCheckpointSaver]:
-    """Return the durable fact store and a fresh, session-only checkpointer."""
+    """Return the durable store and a fresh, session-only checkpointer."""
     global _STORE
 
     if _STORE is None:

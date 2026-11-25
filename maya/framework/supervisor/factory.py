@@ -1,6 +1,7 @@
 import uuid
 import json
 import hashlib
+import logging
 import re
 from datetime import datetime
 from typing import Optional, Literal, List, Dict, Any, Tuple
@@ -13,6 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, Tool
 from langgraph.graph import StateGraph, END, START
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
+from psycopg import Error as PostgresError
 
 from maya.agents.config import load_agent_specs
 from maya.agents.health_rag.agent import ClarificationAssessmentError, DisambiguationDecision
@@ -42,6 +44,7 @@ from langgraph.func import task
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 model = get_chat_model()
 
 
@@ -557,12 +560,18 @@ def build_supervisor(*, biomarker_service=None):
         )
 
         namespace = ("health_rag", user_id, "qa_history")
-        normalized_query = " ".join(re.sub(r"[^a-z0-9]+", " ", standalone_question.lower()).split())
         style_key = agent.cache_scope(preferences.response_style(), ontology_context, ontology_memory_context)
-        summary_key = f"summary:{style_key}:{hashlib.sha256(normalized_query.encode('utf-8')).hexdigest()[:16]}"
+        question_hash = hashlib.sha256(json.dumps([health_context, question]).encode("utf-8")).hexdigest()
+        # The new key keeps replies independent of legacy records that stored dialogue.
+        summary_key = f"answer:{style_key}:{question_hash}"
 
         allow_cache = not biomarker_results and not clarification_decision.urgent_safety_bypass
         exact_item = answer_cache.get(namespace, summary_key) if allow_cache else None
+        if allow_cache and exact_item is None:
+            try:
+                exact_item = store.get(namespace, summary_key)
+            except PostgresError:
+                logger.warning("Could not read a saved HealthRAG reply.")
         if exact_item is not None:
             value = getattr(exact_item, "value", {})
             if isinstance(value, dict) and value.get("summary"):
@@ -656,16 +665,17 @@ def build_supervisor(*, biomarker_service=None):
                 summary_text = f"{summary_text}\n\n{contact}"
         summary_stored = False
         if citations and answer_text and allow_cache:
+            saved_answer = {"summary": summary_text, "citations": citations}
+            try:
+                store.put(namespace, summary_key, saved_answer, index=False)
+            except PostgresError:
+                logger.warning("Could not save a HealthRAG reply.")
             answer_cache.put(
                 namespace,
                 summary_key,
                 {
-                    "query": standalone_question,
+                    **saved_answer,
                     "user_question": question,
-                    "normalized_user_question": " ".join(re.sub(r"[^a-z0-9]+", " ", question.lower()).split()),
-                    "normalized_query": normalized_query,
-                    "summary": summary_text,
-                    "citations": citations,
                     "type": "health_rag_summary",
                     "response_style": style_key,
                 },
